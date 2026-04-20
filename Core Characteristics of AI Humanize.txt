@@ -1,0 +1,76 @@
+Core Characteristics of AI Humanizers
+1. Sentence Restructuring
+AI humanizers frequently change how sentences are built:
+
+Splitting long sentences into shorter ones
+Merging short sentences into more complex structures
+Switching between active and passive voice
+
+This aims to reduce the uniform sentence patterns commonly associated with AI‑generated text. [smarter.com], [hastewire.com]
+
+2. Vocabulary Variation
+Instead of repeating safe, high‑probability words, humanizers introduce:
+
+Controlled synonym substitutions
+Domain‑appropriate terminology
+More varied lexical choices
+
+The goal is to resemble how humans naturally vary word choice rather than always selecting the statistically “best” option. [hastewire.com], [re-thinkin...future.com]
+
+3. Adjustment of Perplexity
+A defining trait of human writing is moderate unpredictability. AI humanizers attempt to:
+
+Reduce overly predictable word sequences
+Introduce mild surprise in phrasing without harming clarity
+
+This is tied to the concept of perplexity, a metric commonly discussed in AI detection research. [re-thinkin...future.com], [hastewire.com]
+
+4. Increased Burstiness (Rhythm Variation)
+Human writing naturally alternates:
+
+Short, direct sentences
+Longer, more elaborate ones
+
+AI humanizers simulate this rhythm—called burstiness—to avoid the evenly paced, metronomic structure typical of raw AI text. [re-thinkin...future.com], [intellectualead.com]
+
+5. Preservation of Original Meaning
+A key characteristic separating humanizers from aggressive spinners is semantic retention:
+
+Ideas, arguments, and factual content are preserved
+Changes are primarily stylistic, not conceptual
+
+This is especially emphasized in tools marketed for academic or professional use. [writeninja.ai], [paperpal.com]
+
+6. Tone and Register Control
+Many AI humanizers allow adjustment of tone:
+
+Academic
+Professional
+Neutral
+Conversational
+
+This helps align the output with specific contexts such as theses, reports, or formal writing, where tone consistency matters. [smarter.com], [writeninja.ai]
+
+7. Context‑Aware Rewriting
+More advanced humanizers analyze paragraph‑level flow, not just individual sentences. They may:
+
+Improve transitions
+Adjust rhetorical connectors
+Smooth logical progression
+
+This distinguishes true humanizers from basic paraphrasing tools. [writeninja.ai], [seo.goover.ai]
+
+8. Detector‑Awareness (But No Guarantees)
+Many AI humanizers are designed with knowledge of how AI detectors evaluate text patterns. However:
+
+Independent studies show mixed effectiveness
+No tool guarantees consistent results across detectors like Turnitin or Originality.ai
+
+Modern detectors adapt quickly and often retrain on humanized outputs. [smarter.com], [hastewire.com]
+
+9. Ethical and Privacy Trade‑offs
+Humanizers typically require text to be uploaded to third‑party systems. Key concerns include:
+
+Text retention policies
+Training reuse
+Academic integrity risks
