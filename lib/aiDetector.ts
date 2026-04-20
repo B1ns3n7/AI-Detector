@@ -254,7 +254,7 @@ function computeStylometrySignals(
 // Each sentence is independently scored across signals to produce inline highlights.
 
 function scoreSentence(sent: string, hasCitations: boolean): SentenceResult {
-  const words = sent.toLowerCase().match(/\b[a-z]+\b/g) || [];
+  const words: string[] = sent.toLowerCase().match(/\b[a-z]+\b/g) || [];
   const wc = Math.max(words.length, 1);
   const signals: string[] = [];
   let rawScore = 0;
