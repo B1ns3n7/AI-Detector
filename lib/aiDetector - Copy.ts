@@ -78,7 +78,7 @@ function computePerplexityScore(words: string[]): { score: number; detail: strin
 
   const uniqueWords = new Set(words);
   const ttr = uniqueWords.size / words.length;
-  const avgWordLen = words.reduce((s: number, w: string) => s + w.length, 0) / words.length;
+  const avgWordLen = words.reduce((s, w) => s + w.length, 0) / words.length;
 
   const bigrams: string[] = [];
   for (let i = 0; i < words.length - 1; i++) bigrams.push(`${words[i]} ${words[i + 1]}`);
@@ -108,9 +108,9 @@ function computeBurstinessScore(sentences: string[]): { score: number; detail: s
   if (sentences.length < 2) return { score: 10, detail: "single sentence — cannot measure" };
 
   const sentLengths = sentences.map((s) => s.trim().split(/\s+/).length);
-  const avg = sentLengths.reduce((a: number, b: number) => a + b, 0) / sentLengths.length;
+  const avg = sentLengths.reduce((a, b) => a + b, 0) / sentLengths.length;
   const variance =
-    sentLengths.reduce((s: number, l: number) => s + Math.pow(l - avg, 2), 0) / sentLengths.length;
+    sentLengths.reduce((s, l) => s + Math.pow(l - avg, 2), 0) / sentLengths.length;
   const stdDev = Math.sqrt(variance);
   const cv = stdDev / Math.max(avg, 1);
 
@@ -261,7 +261,7 @@ function scoreSentence(sent: string, hasCitations: boolean): SentenceResult {
   const maxRaw = 70; // calibrated max for a single sentence
 
   // Perplexity signals
-  const avgWordLen = words.reduce((s: number, w: string) => s + w.length, 0) / wc;
+  const avgWordLen = words.reduce((s, w) => s + w.length, 0) / wc;
   if (avgWordLen > 6.5) { rawScore += 12; signals.push("long words"); }
   else if (avgWordLen > 5.8) { rawScore += 6; }
 
@@ -378,7 +378,7 @@ export function analyzeText(text: string): AnalysisResult {
   const allSignals: ScoredSignal[] = [perplexitySignal, burstinessSignal, ...stylometrySignals];
 
   // Aggregate score
-  const rawScore = allSignals.reduce((sum: number, s: any) => sum + s.score, 0);
+  const rawScore = allSignals.reduce((sum, s) => sum + s.score, 0);
   const maxRaw = 126;
   const normalized = Math.min(100, (rawScore / maxRaw) * 100);
 
