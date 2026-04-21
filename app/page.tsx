@@ -5559,6 +5559,52 @@ export default function DetectorPage() {
     return () => window.removeEventListener("keydown", handler);
   });
 
+  // ─────────────────────────────────────────────────────────────────────────
+  //  SOURCE-CODE PROTECTION
+  //  Blocks the most common browser-based inspection vectors:
+  //    1. Right-click context menu  (View Page Source / Inspect Element)
+  //    2. Keyboard shortcuts (F12, Ctrl+Shift+I/J/C, Ctrl+U, Ctrl+S)
+  // ─────────────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    // 1. Disable right-click context menu
+    const handleContextMenu = (e: MouseEvent) => {
+      e.preventDefault();
+      return false;
+    };
+
+    // 2. Block common DevTools / View-Source keyboard shortcuts
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const ctrl  = e.ctrlKey || e.metaKey;
+      const shift = e.shiftKey;
+
+      // F12 — open DevTools
+      if (e.key === "F12") { e.preventDefault(); return false; }
+
+      // Ctrl+Shift+I / Cmd+Option+I — Inspector
+      if (ctrl && shift && (e.key === "I" || e.key === "i")) { e.preventDefault(); return false; }
+
+      // Ctrl+Shift+J / Cmd+Option+J — Console
+      if (ctrl && shift && (e.key === "J" || e.key === "j")) { e.preventDefault(); return false; }
+
+      // Ctrl+Shift+C / Cmd+Option+C — Element picker
+      if (ctrl && shift && (e.key === "C" || e.key === "c")) { e.preventDefault(); return false; }
+
+      // Ctrl+U — View Page Source
+      if (ctrl && (e.key === "U" || e.key === "u")) { e.preventDefault(); return false; }
+
+      // Ctrl+S — Save page
+      if (ctrl && (e.key === "S" || e.key === "s")) { e.preventDefault(); return false; }
+    };
+
+    document.addEventListener("contextmenu", handleContextMenu);
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.removeEventListener("contextmenu", handleContextMenu);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, []);
+
   // Re-apply 3-engine consensus when neural resolves
   useEffect(() => {
     if (!neuralResult || !rawPerpResult || !rawBurstResult) return;
