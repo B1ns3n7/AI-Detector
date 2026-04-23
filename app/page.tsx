@@ -6714,7 +6714,7 @@ export default function DetectorPage() {
                             aria-pressed={judgment === val}
                             style={judgment === val
                               ? { background: bg, color, borderColor: border, boxShadow: `0 0 0 2px ${color}40` }
-                              : { background: "#fff", color: "#94a3b8", borderColor: "#e2e8f0" }}>
+                              : { background: `${bg}99`, color: `${color}cc`, borderColor: border }}>
                             {judgment === val && <span>✓</span>}
                             {val}
                           </button>
