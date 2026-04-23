@@ -43,29 +43,8 @@ function normaliseHomoglyphs(text: string): string {
   return text.split("").map(c => HOMOGLYPH_MAP[c] ?? c).join("");
 }
 
-// ── Enhancement #8: Whitespace-injection & Unicode-period evasion detection ──
-// Detects students splitting words with extra spaces ("furt  hermore") or using
-// Unicode full-stop U+FF0E instead of ASCII period to evade sentence detection.
-function detectEvasionAttempts(text: string): { detected: boolean; types: string[] } {
-  const types: string[] = [];
-  // Whitespace injection: 2+ spaces inside a word token area (not paragraph breaks)
-  if (/\b\w+\s{2,}\w+\b/.test(text)) types.push("whitespace-injection");
-  // Unicode full-stop substitution
-  if (/\uFF0E/.test(text)) types.push("unicode-period");
-  // Tag-based injection remnants
-  if (/\[AI:|\[HUMAN:|<ai>|<human>/i.test(text)) types.push("bracket-tagging");
-  // Repetitive punctuation padding
-  if (/[.]{4,}|[,]{3,}/.test(text)) types.push("punctuation-padding");
-  return { detected: types.length > 0, types };
-}
-
 function sanitiseInput(text: string): string {
-  let sanitised = normaliseHomoglyphs(stripInvisibleCharacters(text));
-  // Normalize Unicode periods to ASCII
-  sanitised = sanitised.replace(/\uFF0E/g, ".");
-  // Collapse whitespace injection (multiple spaces within text lines, not paragraph breaks)
-  sanitised = sanitised.replace(/([^\n]) {2,}([^\n])/g, (_, a, b) => `${a} ${b}`);
-  return sanitised;
+  return normaliseHomoglyphs(stripInvisibleCharacters(text));
 }
 
 async function loadJsPDF(): Promise<any> {
@@ -123,8 +102,7 @@ async function generatePDFReport(
   burstResult: EngineResult | null,
   neuralResult: EngineResult | null,
   judgment: string,
-  judgeNotes: string,
-  evasionTypes: string[] = []
+  judgeNotes: string
 ): Promise<void> {
   const jsPDF = await loadJsPDF();
 
@@ -243,7 +221,7 @@ async function generatePDFReport(
   sf("bold", 20, C.white);
   tx("AI Content Detection Report", ML, 17);
   sf("normal", 8, C.s400);
-  tx("Perplexity & Stylometry  ·  Burstiness & Cognitive  ·  Neural Perplexity  ·  MTLD  ·  Idea Repetition  ·  Bimodal Distribution  ·  ESL Calibration", ML, 26);
+  tx("Perplexity & Stylometry  ·  Burstiness & Cognitive  ·  Neural Perplexity  ·  MTLD  ·  Semantic Analysis  ·  Radar Fingerprint", ML, 26);
   const dateStr = now.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
   const timeStr = now.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
   sf("normal", 7.5, C.s400);
@@ -370,16 +348,6 @@ async function generatePDFReport(
     tx(`Overall Verdict: ${combLabel}`, ML + CW / 2, y + 60.5, { align: "center" });
 
     y += 72;
-  }
-
-  // Enhancement #12: Evasion detection notice in PDF
-  if (evasionTypes.length > 0) {
-    need(14);
-    rect(ML, y, CW, 12, C.aiRedFill, C.aiRedBrd);
-    sf("bold", 7, C.aiRedTxt); tx("⚠ Evasion Techniques Detected", ML + 4, y + 5);
-    sf("normal", 6.5, C.s600);
-    tx(`Detected: ${evasionTypes.join(", ")}. The submitted text may have been manipulated to evade detection. Results may underestimate AI likelihood.`, ML + 4, y + 10);
-    y += 18;
   }
 
   // ── Full submitted text (no truncation) ────────────────────────────────
@@ -695,7 +663,7 @@ async function generatePDFReport(
   if (burstResult) drawEngineSection("Burstiness & Cognitive Markers", C.green, "BC", "Sentence length variation (CV), rhetorical devices, short-sentence presence, contraction signals.",  "Sentence Burstiness (CV)",         burstResult);
   if (neuralResult) {
     const violetRGB: RGB = [124, 58, 237];
-    drawEngineSection("Neural Perplexity", violetRGB, "NP", "LLM-based Binoculars-style analysis: token predictability, semantic smoothness, structural uniformity, DetectGPT perturbation resistance, bimodal sentence distribution (mixed authorship), ESL/Philippine calibration.", "Token Predictability + Semantic Smoothness + Perturbation Resistance", neuralResult);
+    drawEngineSection("Neural Perplexity", violetRGB, "NP", "LLM-based analysis: token predictability, semantic smoothness, structural uniformity, human cognitive markers.", "Token Predictability + Semantic Smoothness", neuralResult);
   }
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -1587,83 +1555,7 @@ function intraDocumentShift(sentences: string[]): {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  ENHANCEMENT #2 — SENTENCE-LEVEL IDEA REPETITION DETECTOR
-//  AI restates the same point 2-3× per paragraph in slightly different wording.
-//  Humans rarely do this. We detect it with word-overlap (Jaccard similarity)
-//  between consecutive and near-consecutive sentences within each paragraph.
-//  Score: 0–22. Fires when ≥2 sentence pairs in the same paragraph share >60%
-//  content overlap (after stripping stop words).
-// ─────────────────────────────────────────────────────────────────────────────
-
-const STOP_WORDS = new Set([
-  "a","an","the","and","or","but","is","are","was","were","be","been","being",
-  "have","has","had","do","does","did","will","would","could","should","may",
-  "might","shall","must","can","to","of","in","on","at","for","with","by","from",
-  "as","this","that","these","those","it","its","they","them","their","we","our",
-  "you","your","i","my","me","he","she","his","her","also","not","no","so","if",
-  "when","which","who","what","how","all","any","both","each","few","more","most",
-]);
-
-function contentWords(sentence: string): Set<string> {
-  const words = sentence.toLowerCase().match(/\b[a-z]{3,}\b/g) || [];
-  return new Set(words.filter(w => !STOP_WORDS.has(w)));
-}
-
-function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
-  if (a.size === 0 || b.size === 0) return 0;
-  let intersection = 0;
-  a.forEach(w => { if (b.has(w)) intersection++; });
-  const union = a.size + b.size - intersection;
-  return intersection / Math.max(union, 1);
-}
-
-function ideaRepetitionScore(text: string, sentences: string[]): { score: number; repetitivePairs: number; details: string } {
-  if (sentences.length < 4) return { score: 0, repetitivePairs: 0, details: "Insufficient sentences for repetition analysis." };
-
-  // Split into paragraphs and analyze within each
-  const paragraphs = text.split(/\n\n+/).map(p => p.trim()).filter(p => p.length > 40);
-  if (paragraphs.length < 2) {
-    // Treat whole text as one paragraph
-    const contentSets = sentences.map(contentWords);
-    return computeRepetitionFromSets(contentSets, sentences.length);
-  }
-
-  let totalPairs = 0;
-  for (const para of paragraphs) {
-    // Find sentences belonging to this paragraph
-    const paraSents = sentences.filter(s => para.includes(s.trim().slice(0, 30)));
-    if (paraSents.length < 2) continue;
-    const sets = paraSents.map(contentWords);
-    const { repetitivePairs } = computeRepetitionFromSets(sets, paraSents.length);
-    totalPairs += repetitivePairs;
-  }
-
-  let score = 0;
-  if (totalPairs >= 5) score = 22;
-  else if (totalPairs >= 3) score = 16;
-  else if (totalPairs >= 2) score = 10;
-  else if (totalPairs >= 1) score = 5;
-
-  const details = score > 0
-    ? `${totalPairs} sentence pair(s) with >60% content overlap detected across paragraphs. AI models restate the same idea multiple times in slightly different wording within the same paragraph — a pattern human writers rarely produce.`
-    : "No significant within-paragraph idea repetition detected.";
-
-  return { score, repetitivePairs: totalPairs, details };
-}
-
-function computeRepetitionFromSets(sets: Set<string>[], count: number): { repetitivePairs: number } {
-  let pairs = 0;
-  const THRESHOLD = 0.60;
-  for (let i = 0; i < sets.length - 1; i++) {
-    // Compare adjacent and one-apart pairs
-    for (let j = i + 1; j <= Math.min(i + 2, sets.length - 1); j++) {
-      if (sets[i].size >= 4 && sets[j].size >= 4 && jaccardSimilarity(sets[i], sets[j]) >= THRESHOLD) {
-        pairs++;
-      }
-    }
-  }
-  return { repetitivePairs: pairs };
-}
+//  IMPROVEMENT #1 — HEDGED-CERTAINTY FINGERPRINT
 //  AI essays hedge every empirical claim: "may", "can often", "generally",
 //  "tends to", "in many cases", "it is possible". A human editorial uses hedges
 //  sparingly and purposefully; AI layers them on every sentence as a safety
@@ -2119,12 +2011,10 @@ function computeConfidenceInterval(
   // Expand uncertainty for warnings
   const warningPenalty = warnings.length * 8;
 
-  // Expand uncertainty for small texts; NARROW it for long ones (enhancement #4)
-  // Long texts (>400w) give statistical signals far more reliability — tighten CI.
+  // Expand uncertainty for small texts
   const sizePenalty = wc < 100 ? 15 : wc < 200 ? 8 : 0;
-  const sizeBonus   = wc > 700 ? 6 : wc > 400 ? 3 : 0; // tighter CI for longer texts
 
-  const totalWidth = Math.min(40, Math.max(4, baseWidth + warningPenalty + sizePenalty - sizeBonus));
+  const totalWidth = Math.min(40, baseWidth + warningPenalty + sizePenalty);
   const low = Math.max(0, Math.round(rawScore - totalWidth / 2));
   const high = Math.min(100, Math.round(rawScore + totalWidth / 2));
 
@@ -2758,10 +2648,7 @@ function runPerplexityEngine(text: string): EngineResult {
   // ── Signal 24: Discourse Schema Predictability ───────────────────────────
   const { score: discourseSchemaScoreVal, details: discourseSchemaDetails } = discourseSchemaScore(text, sentences);
 
-  // ── Signal 25: Idea Repetition (Enhancement #2) ──────────────────────────
-  const { score: ideaRepScore, repetitivePairs, details: ideaRepDetails } = ideaRepetitionScore(text, sentences);
-
-  const activeSignals = [vocabScore, transScore, bigramScore, ttrScore, nomScore, rhythmScore, structureScore, ethicsScore, tricolonScore, llamaScore, claudeCatchScore, paraOpenerScore, conclusionScore, syntaxScore, hedgeScore, clauseStackScore, windowTTRScore, mtldScoreVal, semanticSimScore, toneFlatnessScoreVal, vagueCtScore, discourseSchemaScoreVal, ideaRepScore]
+  const activeSignals = [vocabScore, transScore, bigramScore, ttrScore, nomScore, rhythmScore, structureScore, ethicsScore, tricolonScore, llamaScore, claudeCatchScore, paraOpenerScore, conclusionScore, syntaxScore, hedgeScore, clauseStackScore, windowTTRScore, mtldScoreVal, semanticSimScore, toneFlatnessScoreVal, vagueCtScore, discourseSchemaScoreVal]
     .filter(s => s > 5).length;
 
   // ── Improvement #8: Empirically-calibrated signal weights ────────────────
@@ -2801,8 +2688,7 @@ function runPerplexityEngine(text: string): EngineResult {
     semanticSimScore     * W_TIER_F +
     toneFlatnessScoreVal * W_TIER_F +
     vagueCtScore         * W_TIER_F +
-    discourseSchemaScoreVal * W_TIER_F +
-    ideaRepScore         * W_TIER_F;  // idea repetition (enhancement #2)
+    discourseSchemaScoreVal * W_TIER_F;
 
   const weightedMaxTotal =
     35  * W_TIER_A + 35  * W_TIER_A + 30  * W_TIER_A +  // vocab + trans + bigram
@@ -2810,7 +2696,7 @@ function runPerplexityEngine(text: string): EngineResult {
     28  * W_TIER_C + 24  * W_TIER_C + 28  * W_TIER_C + 20 * W_TIER_C + 20 * W_TIER_C + // hedge+clause+syntax+ethics+tricolon
     25  * W_TIER_D + 20  * W_TIER_D + 20  * W_TIER_D + 22 * W_TIER_D + // ttr+nom+rhythm+windowTTR
     28  * W_TIER_E + 24  * W_TIER_E +  // llama + claude
-    24  * W_TIER_F + 20  * W_TIER_F + 18 * W_TIER_F + 16 * W_TIER_F + 18 * W_TIER_F + 22 * W_TIER_F; // Tier F signals incl. idea rep
+    24  * W_TIER_F + 20  * W_TIER_F + 18 * W_TIER_F + 16 * W_TIER_F + 18 * W_TIER_F; // new Tier F signals
 
   const rawTotal = weightedRawTotal; // kept for backward compat with cluster boosts
   const maxTotal = weightedMaxTotal;
@@ -3073,13 +2959,6 @@ function runPerplexityEngine(text: string): EngineResult {
       strength: Math.min(100, Math.round((discourseSchemaScoreVal / 18) * 100)),
       pointsToAI: discourseSchemaScoreVal >= 8,
       wellSupported: discourseSchemaScoreVal >= 13,
-    },
-    {
-      name: "Idea Repetition (Within-Paragraph)",
-      value: ideaRepDetails,
-      strength: Math.min(100, Math.round((ideaRepScore / 22) * 100)),
-      pointsToAI: ideaRepScore >= 5,
-      wellSupported: repetitivePairs >= 3,
     },
   ];
 
@@ -3989,7 +3868,6 @@ function ParagraphHeatMap({ sentences, originalText }: { sentences: SentenceResu
 
 function SentenceChip({ s, idx }: { s: SentenceResult; idx: number }) {
   const [show, setShow] = useState(false);
-  const [copied, setCopied] = useState(false);
   const hl = {
     elevated: { bg: "bg-red-50",    border: "border-red-300",    text: "text-red-900",    dot: "bg-red-400",    label: "Elevated patterns" },
     moderate: { bg: "bg-amber-50",  border: "border-amber-300",  text: "text-amber-900",  dot: "bg-amber-400",  label: "Some patterns" },
@@ -3997,18 +3875,12 @@ function SentenceChip({ s, idx }: { s: SentenceResult; idx: number }) {
   }[s.label];
   const tip = idx % 2 === 0 ? "left-0" : "right-0";
 
-  const handleCopy = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    const report = `Sentence: "${s.text}" | Pattern likelihood: ${s.likelihood}% | Level: ${hl.label}${s.signals.length > 0 ? " | Signals: " + s.signals.join("; ") : ""}`;
-    navigator.clipboard.writeText(report).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
-  };
-
   return (
     <span className={`relative inline cursor-pointer px-0.5 rounded ${hl.bg} border-b-2 ${hl.border} ${hl.text}`}
-      onMouseEnter={() => setShow(true)} onMouseLeave={() => { setShow(false); }}>
+      onMouseEnter={() => setShow(true)} onMouseLeave={() => setShow(false)}>
       {s.text}{" "}
       {show && (
-        <span className={`absolute ${tip} top-full mt-1 z-50 w-80 bg-white border border-gray-200 shadow-xl rounded-xl p-3 text-xs pointer-events-auto`}
+        <span className={`absolute ${tip} top-full mt-1 z-50 w-72 bg-white border border-gray-200 shadow-xl rounded-xl p-3 text-xs pointer-events-none`}
           style={{ whiteSpace: "normal" }}>
           <div className="flex items-center gap-1.5 mb-1.5 font-semibold text-gray-800">
             <span className={`w-2 h-2 rounded-full flex-shrink-0 ${hl.dot}`} />
@@ -4019,19 +3891,12 @@ function SentenceChip({ s, idx }: { s: SentenceResult; idx: number }) {
             This reflects detected patterns only - it does not determine authorship.
           </p>
           {s.signals.length > 0 ? (
-            <ul className="space-y-0.5 text-gray-500 mb-2">
+            <ul className="space-y-0.5 text-gray-500">
               {s.signals.map(sig => (
                 <li key={sig} className="flex items-center gap-1"><span className="text-slate-400">›</span> {sig}</li>
               ))}
             </ul>
-          ) : <span className="text-gray-400 italic block mb-2">No notable patterns in this sentence</span>}
-          {/* Enhancement #11: copy-to-clipboard for academic integrity reports */}
-          <button
-            onClick={handleCopy}
-            className="w-full flex items-center justify-center gap-1.5 px-2 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 transition-colors text-[10px] font-semibold text-slate-600"
-          >
-            {copied ? <><span className="text-emerald-600">✓</span> Copied!</> : <><span>📋</span> Copy for report</>}
-          </button>
+          ) : <span className="text-gray-400 italic">No notable patterns in this sentence</span>}
         </span>
       )}
     </span>
@@ -4585,27 +4450,11 @@ async function runNeuralEngine(text: string, engineAContext?: { score: number; t
     };
   }
 
-  // ── Enhancement #5: Sliding-window strategy for long texts ─────────────────
-  // Previously truncated at 800 words, silently missing the second half of most
-  // student essays. Now: analyze first 700 words + last 500 words separately,
-  // then average scores. This catches mixed-authorship where AI content appears
-  // only in the conclusion (a common student pattern).
-  const MAX_WORDS = 700;
-  const TAIL_WORDS = 500;
-  let analysisText: string;
-  let usedSlidingWindow = false;
-
-  if (wc > MAX_WORDS + TAIL_WORDS) {
-    const wordArr = text.trim().split(/\s+/);
-    const headText = wordArr.slice(0, MAX_WORDS).join(" ");
-    const tailText = wordArr.slice(-TAIL_WORDS).join(" ");
-    analysisText = `[DOCUMENT HEAD — first ${MAX_WORDS} words]\n${headText}\n\n[DOCUMENT TAIL — last ${TAIL_WORDS} words]\n${tailText}\n\n[Note: analyze both sections; flag any authorship inconsistency between head and tail as a potential mixed-authorship signal.]`;
-    usedSlidingWindow = true;
-  } else if (wc > MAX_WORDS) {
-    analysisText = text.trim().split(/\s+/).slice(0, MAX_WORDS).join(" ") + " [truncated for analysis]";
-  } else {
-    analysisText = text;
-  }
+  // Truncate very long texts to stay within a reasonable token budget
+  const MAX_WORDS = 800;
+  const analysisText = wc > MAX_WORDS
+    ? text.trim().split(/\s+/).slice(0, MAX_WORDS).join(" ") + " [truncated for analysis]"
+    : text;
 
   const SYSTEM_PROMPT = `You are an expert AI content detection engine implementing state-of-the-art zero-shot detection methods analogous to Binoculars (Hans et al., ICML 2024) and DetectGPT. Your task is to analyze text and determine the probability it was generated by an AI language model.
 
@@ -4770,9 +4619,6 @@ If they disagree (one > 50, one < 30), look for the reason: paraphrased AI? ESL?
   // The NP prompt already instructs Claude to consider ESL, but the explicit
   // penalty ensures consistent behavior even when the LLM underweights it.
   const npReliabilityNotes: string[] = parsed.reliability_notes ?? [];
-  if (usedSlidingWindow) {
-    npReliabilityNotes.unshift(`Sliding-window analysis: document analyzed as head (first ${MAX_WORDS}w) + tail (last ${TAIL_WORDS}w) to detect mixed authorship across essay sections.`);
-  }
   const npHasESL = npReliabilityNotes.some((n: string) => n.toLowerCase().includes("esl") || n.toLowerCase().includes("non-native") || n.toLowerCase().includes("philippine") || n.toLowerCase().includes("filipino"));
   if (npHasESL) {
     score = Math.max(0, score - 12); // moderate ESL penalty for NP engine
@@ -4858,9 +4704,7 @@ If they disagree (one > 50, one < 30), look for the reason: paraphrased AI? ESL?
     // when overall_score is 0 (INCONCLUSIVE) and per_sentence data is missing/truncated
     const likelihood = Math.min(95, Math.max(0, Math.round(ps?.likelihood ?? Math.max(score, 10))));
     const label: "uncertain" | "moderate" | "elevated" =
-      // Enhancement #7: standardized thresholds matching Engine A (45/22)
-      // Previously NP used 50/25, causing asymmetric sentence highlights between engines.
-      likelihood >= 45 ? "elevated" : likelihood >= 22 ? "moderate" : "uncertain";
+      likelihood >= 50 ? "elevated" : likelihood >= 25 ? "moderate" : "uncertain";
     return {
       text: sent,
       likelihood,
@@ -4903,10 +4747,15 @@ If they disagree (one > 50, one < 30), look for the reason: paraphrased AI? ESL?
 function LiveWordHighlighter({ text }: { text: string }) {
   if (!text.trim()) return null;
 
-  // Enhancement #3: derive bigram list from main AI_BIGRAMS set (previously a
-  // hardcoded 28-phrase list that was out of sync with the 200+ phrase main set).
-  // This ensures Philippine bigrams and all future additions auto-appear here.
-  const AI_BIGRAMS_FLAT = Array.from(AI_BIGRAMS);
+  const AI_BIGRAMS_FLAT = [
+    "plays a crucial","plays a pivotal","plays a vital","it is worth noting",
+    "it is important to note","cannot be overstated","in today's world","in today's society",
+    "it is important","it is crucial","it is essential","in order to ensure",
+    "let's explore","dive deeper","shed light on","at its core","at the heart of",
+    "a nuanced understanding","a deeper understanding","not only","but also",
+    "first and foremost","last but not least","moving forward","going forward",
+    "in conclusion","to summarize","to sum up","in summary",
+  ];
 
   // Tokenize while preserving whitespace/punctuation positions
   const tokens: Array<{ text: string; type: "strong" | "medium" | "bigram" | "normal" }> = [];
@@ -4991,17 +4840,16 @@ function LiveWordHighlighter({ text }: { text: string }) {
 //  Axes: Vocabulary, Burstiness, Structure, Semantic, Tone, Discourse
 // ─────────────────────────────────────────────────────────────────────────────
 
-function RadarChartFingerprint({ perpResult, burstResult, neuralResult }: {
+function RadarChartFingerprint({ perpResult, burstResult }: {
   perpResult: EngineResult | null;
   burstResult: EngineResult | null;
-  neuralResult?: EngineResult | null;
 }) {
   if (!perpResult || !burstResult) return null;
 
   const getSignalStrength = (result: EngineResult, nameFragment: string) =>
     result.signals.find(s => s.name.includes(nameFragment))?.strength ?? 0;
 
-  // Enhancement #9: 8 dimensions including 2 NP-sourced axes
+  // 6 dimensions — each 0-100
   const dims = [
     {
       label: "Vocabulary",
@@ -5026,7 +4874,6 @@ function RadarChartFingerprint({ perpResult, burstResult, neuralResult }: {
       score: Math.max(
         getSignalStrength(perpResult, "Semantic Self-Similarity"),
         getSignalStrength(perpResult, "AI Multi-word"),
-        getSignalStrength(perpResult, "Idea Repetition"),
       ),
       color: "#8b5cf6",
     },
@@ -5046,22 +4893,6 @@ function RadarChartFingerprint({ perpResult, burstResult, neuralResult }: {
       ),
       color: "#10b981",
     },
-    // Enhancement #9: NP-sourced axes — only rendered when NP engine has results
-    ...(neuralResult ? [
-      {
-        label: "Token Pred.",
-        score: getSignalStrength(neuralResult, "Token Predictability"),
-        color: "#7c3aed",
-      },
-      {
-        label: "Smoothness",
-        score: Math.max(
-          getSignalStrength(neuralResult, "Semantic Smoothness"),
-          getSignalStrength(neuralResult, "Perturbation"),
-        ),
-        color: "#db2777",
-      },
-    ] : []),
   ];
 
   const CX = 110, CY = 110, R = 80;
@@ -5356,7 +5187,6 @@ interface ScanRecord {
   verdict: string;
   aiPct: number;
   evidenceStrength: string;
-  reviewerVerdict?: string; // Enhancement #1: store reviewer override
 }
 
 function loadHistory(): ScanRecord[] {
@@ -5365,41 +5195,8 @@ function loadHistory(): ScanRecord[] {
 }
 
 function saveHistory(records: ScanRecord[]) {
-  try { localStorage.setItem("aidetect_history", JSON.stringify(records.slice(0, 50))); }
+  try { localStorage.setItem("aidetect_history", JSON.stringify(records.slice(0, 20))); }
   catch { /* quota exceeded — ignore */ }
-}
-
-// Enhancement #1: Reviewer feedback calibration
-// Stores reviewer overrides and computes a local false-positive rate.
-// When the detector repeatedly says "AI" but reviewers mark "Human",
-// this is surfaced as a calibration warning to the user.
-interface CalibrationData {
-  totalScans: number;
-  reviewerOverrides: number; // cases where reviewer disagreed with system
-  systemSaidAI_reviewerSaidHuman: number; // false positive count
-  systemSaidHuman_reviewerSaidAI: number; // false negative count
-}
-
-function loadCalibration(): CalibrationData {
-  try { return JSON.parse(localStorage.getItem("aidetect_calibration") || "null") ?? { totalScans: 0, reviewerOverrides: 0, systemSaidAI_reviewerSaidHuman: 0, systemSaidHuman_reviewerSaidAI: 0 }; }
-  catch { return { totalScans: 0, reviewerOverrides: 0, systemSaidAI_reviewerSaidHuman: 0, systemSaidHuman_reviewerSaidAI: 0 }; }
-}
-
-function saveCalibration(data: CalibrationData) {
-  try { localStorage.setItem("aidetect_calibration", JSON.stringify(data)); } catch {}
-}
-
-function recordReviewerFeedback(systemVerdict: string, reviewerVerdict: string) {
-  const cal = loadCalibration();
-  cal.totalScans++;
-  const sysIsAI = systemVerdict.includes("AI") || systemVerdict.includes("Likely AI") || systemVerdict.includes("Almost Certainly");
-  const revIsAI = reviewerVerdict === "AI-Generated";
-  const sysIsHuman = systemVerdict.includes("Human") || systemVerdict.includes("Mostly Human") || systemVerdict.includes("Likely Human");
-  const revIsHuman = reviewerVerdict === "Human-Written";
-  if (sysIsAI !== revIsAI || sysIsHuman !== revIsHuman) cal.reviewerOverrides++;
-  if (sysIsAI && revIsHuman) cal.systemSaidAI_reviewerSaidHuman++;
-  if (sysIsHuman && revIsAI) cal.systemSaidHuman_reviewerSaidAI++;
-  saveCalibration(cal);
 }
 
 // ── Breakdown helper (kept in sync with PDF layer) ──────────────────────────
@@ -5762,66 +5559,19 @@ function HistoryPanel({ history, onSelect, onClear }: {
   onSelect: (id: string) => void;
   onClear: () => void;
 }) {
-  const calibration = loadCalibration();
-
   if (history.length === 0) return (
     <div className="text-center py-10 px-6">
       <div className="text-4xl mb-3 opacity-20">🕐</div>
       <p className="text-sm text-slate-400 font-medium">No scans yet</p>
-      <p className="text-xs text-slate-300 mt-1">Your last 50 analyses appear here</p>
+      <p className="text-xs text-slate-300 mt-1">Your last 20 analyses appear here</p>
     </div>
   );
-
-  // Enhancement #10: compute trend summary across last N scans
-  const recent = history.slice(0, 20);
-  const aiCount     = recent.filter(r => r.verdict.includes("AI") || r.verdict.includes("Likely AI") || r.verdict.includes("Almost")).length;
-  const humanCount  = recent.filter(r => r.verdict.includes("Human") && !r.verdict.includes("Review")).length;
-  const mixedCount  = recent.filter(r => r.verdict.includes("Mixed") || r.verdict.includes("Review")).length;
-  const avgAI       = Math.round(recent.reduce((s, r) => s + r.aiPct, 0) / recent.length);
-  const fpRate      = calibration.totalScans > 0
-    ? Math.round((calibration.systemSaidAI_reviewerSaidHuman / calibration.totalScans) * 100)
-    : null;
-
   return (
     <div className="space-y-2 py-3 px-4">
-      <div className="flex items-center justify-between mb-2">
+      <div className="flex items-center justify-between mb-3">
         <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Recent Scans</p>
         <button onClick={onClear} className="text-[10px] text-slate-400 hover:text-red-500 transition-colors">Clear all</button>
       </div>
-
-      {/* Enhancement #10: Trend summary */}
-      <div className="rounded-xl bg-slate-50 border border-slate-200 p-3 mb-3">
-        <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wide mb-2">Last {recent.length} Scans — Trend</p>
-        <div className="grid grid-cols-3 gap-2 mb-2">
-          {[
-            { label: "AI-flagged", count: aiCount, color: "#ef4444", bg: "#fef2f2" },
-            { label: "Human", count: humanCount, color: "#16a34a", bg: "#f0fdf4" },
-            { label: "Mixed/Review", count: mixedCount, color: "#d97706", bg: "#fffbeb" },
-          ].map(({ label, count, color, bg }) => (
-            <div key={label} className="rounded-lg p-2 text-center" style={{ background: bg }}>
-              <p className="text-lg font-black" style={{ color }}>{count}</p>
-              <p className="text-[9px] font-semibold text-slate-500">{label}</p>
-            </div>
-          ))}
-        </div>
-        <div className="flex items-center justify-between text-[10px] text-slate-500">
-          <span>Avg AI score: <strong className="text-slate-700">{avgAI}%</strong></span>
-          {fpRate !== null && (
-            <span className={fpRate > 20 ? "text-red-600 font-bold" : "text-slate-500"}>
-              {fpRate > 20 ? `⚠ ${fpRate}% reviewer override rate` : `${calibration.reviewerOverrides} reviewer overrides`}
-            </span>
-          )}
-        </div>
-        {/* Enhancement #1: Calibration warning if false-positive rate is high */}
-        {fpRate !== null && fpRate > 25 && (
-          <div className="mt-2 rounded-lg bg-amber-50 border border-amber-200 px-2 py-1.5">
-            <p className="text-[9px] text-amber-700 font-semibold">
-              ⚠ High reviewer override rate ({fpRate}%): your reviewers frequently disagree with AI verdicts. Consider raising the AI threshold for your institution's writing style.
-            </p>
-          </div>
-        )}
-      </div>
-
       {history.map(rec => {
         const tier = getTier(rec.aiPct);
         return (
@@ -5831,12 +5581,7 @@ function HistoryPanel({ history, onSelect, onClear }: {
               <span className="text-[10px] font-bold px-2 py-0.5 rounded-full" style={{ color: tier.color, background: tier.bg, border: `1px solid ${tier.border}` }}>
                 {tier.label}
               </span>
-              <div className="flex items-center gap-2">
-                {rec.reviewerVerdict && (
-                  <span className="text-[9px] text-slate-400 italic">reviewer: {rec.reviewerVerdict}</span>
-                )}
-                <span className="text-[10px] text-slate-400">{new Date(rec.ts).toLocaleDateString()}</span>
-              </div>
+              <span className="text-[10px] text-slate-400">{new Date(rec.ts).toLocaleDateString()}</span>
             </div>
             <p className="text-[11px] text-slate-700 font-medium line-clamp-1">{rec.snippet}</p>
             <p className="text-[10px] text-slate-400 mt-0.5">{rec.wordCount} words · AI {rec.aiPct}%</p>
@@ -5975,7 +5720,6 @@ export default function DetectorPage() {
   const [activeTab,      setActiveTab]      = useState<"analyze" | "history">("analyze");
   const [showShare,      setShowShare]      = useState(false);
   const [showHighlighter,setShowHighlighter]= useState(false);
-  const [evasionResult,  setEvasionResult]  = useState<{ detected: boolean; types: string[] } | null>(null);
 
   const fileInputRef    = useRef<HTMLInputElement>(null);
   const textareaRef     = useRef<HTMLTextAreaElement>(null);
@@ -6165,8 +5909,6 @@ export default function DetectorPage() {
 
     // ── SANITISE: strip invisible chars and normalise homoglyphs ──────────────
     // Closes mechanical evasion attacks before any engine sees the text.
-    const evasion = detectEvasionAttempts(trimmed); // Enhancement #8: detect BEFORE sanitising
-    setEvasionResult(evasion.detected ? evasion : null);
     const sanitised = sanitiseInput(trimmed);
 
     setPerpResult(null); setBurstResult(null); setNeuralResult(null);
@@ -6286,7 +6028,6 @@ export default function DetectorPage() {
     setInputText(""); setPerpResult(null); setBurstResult(null); setNeuralResult(null);
     setRawPerpResult(null); setRawBurstResult(null); setError("");
     setJudgment(""); setJudgeNotes(""); setPdfFileName(""); setPdfPageCount(0); setUrlInput("");
-    setEvasionResult(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
@@ -6310,8 +6051,7 @@ export default function DetectorPage() {
 
   const handleDownloadPDF = async () => {
     setGeneratingPdf(true);
-    const evasion = detectEvasionAttempts(inputText);
-    try { await generatePDFReport(inputText, perpResult, burstResult, neuralResult, judgment, judgeNotes, evasion.types); }
+    try { await generatePDFReport(inputText, perpResult, burstResult, neuralResult, judgment, judgeNotes); }
     catch { setError("Failed to generate PDF. Please try again."); }
     finally { setGeneratingPdf(false); }
   };
@@ -6492,21 +6232,11 @@ export default function DetectorPage() {
                             const json = await res.json();
                             const div = document.createElement("div");
                             div.innerHTML = json.contents;
-                            // Enhancement #6: content extraction filter
-                            // Remove navigation, footer, sidebar, ad boilerplate before extracting text.
-                            // These short UI strings inflate named-entity count and pollute TTR.
-                            const removeSelectors = ["nav","header","footer","aside","script","style","noscript","[class*='nav']","[class*='menu']","[class*='sidebar']","[class*='footer']","[class*='cookie']","[class*='banner']","[id*='nav']","[id*='footer']","[id*='sidebar']","[id*='menu']"];
-                            removeSelectors.forEach(sel => {
-                              try { div.querySelectorAll(sel).forEach(el => el.remove()); } catch {}
-                            });
-                            const rawLines = Array.from(div.querySelectorAll("p, h1, h2, h3, h4, li, blockquote, td"))
-                              .map(el => el.textContent?.trim() ?? "")
-                              .filter(Boolean);
-                            // Filter out lines that look like navigation/UI text:
-                            // lines <40 chars are likely buttons, menu items, captions
-                            const contentLines = rawLines.filter(line => line.length >= 40);
-                            const text = contentLines.join("\n");
-                            if (!text || text.length < 50) throw new Error("Not enough content text");
+                            const text = Array.from(div.querySelectorAll("p, h1, h2, h3, li"))
+                              .map(el => el.textContent?.trim())
+                              .filter(Boolean)
+                              .join("\n");
+                            if (!text || text.length < 50) throw new Error("Not enough text");
                             setInputText(text.slice(0, 15000));
                           } catch { setError("Could not fetch URL. Try pasting the text directly."); }
                           finally { setUrlLoading(false); }
@@ -6535,21 +6265,6 @@ export default function DetectorPage() {
                       <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
                     </svg>
                     <p className="text-sm text-red-700 font-medium">{error}</p>
-                  </div>
-                )}
-
-                {/* Enhancement #8: Evasion Detection Banner */}
-                {evasionResult?.detected && (
-                  <div className="flex items-start gap-2.5 rounded-xl bg-red-50 border border-red-300 px-4 py-3" role="alert">
-                    <span className="text-red-500 text-base flex-shrink-0 mt-0.5">🚨</span>
-                    <div>
-                      <p className="text-sm font-bold text-red-700 mb-0.5">Evasion Attempt Detected</p>
-                      <p className="text-xs text-red-600 leading-relaxed">
-                        The submitted text contains evasion techniques: <strong>{evasionResult.types.join(", ")}</strong>.
-                        The text has been normalised before analysis, but results may underestimate AI likelihood.
-                        This finding has been recorded in the PDF report.
-                      </p>
-                    </div>
                   </div>
                 )}
 
@@ -6688,17 +6403,7 @@ export default function DetectorPage() {
                           { val: "Mixed"         as const, color: "#d97706", bg: "#fffbeb", border: "#fde68a" },
                           { val: "Human-Written" as const, color: "#16a34a", bg: "#f0fdf4", border: "#bbf7d0" },
                         ]).map(({ val, color, bg, border }) => (
-                          <button key={val} onClick={() => {
-                            const newVal = judgment === val ? "" : val;
-                            setJudgment(newVal);
-                            // Enhancement #1: record reviewer feedback for local calibration
-                            if (newVal && combined) {
-                              recordReviewerFeedback(combined.tier.label, newVal);
-                              // Also update the most recent history record with the reviewer verdict
-                              const h = loadHistory();
-                              if (h.length > 0) { h[0].reviewerVerdict = newVal; saveHistory(h); setHistory(h); }
-                            }
-                          }}
+                          <button key={val} onClick={() => setJudgment(judgment === val ? "" : val)}
                             className="flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-semibold transition-all"
                             aria-pressed={judgment === val}
                             style={judgment === val
@@ -6780,7 +6485,7 @@ export default function DetectorPage() {
             {(perpResult || burstResult) && (
               <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden p-6">
                 <p className="text-sm font-bold text-slate-800 mb-4">Writing Fingerprint</p>
-                <RadarChartFingerprint perpResult={perpResult} burstResult={burstResult} neuralResult={neuralResult} />
+                <RadarChartFingerprint perpResult={perpResult} burstResult={burstResult} />
               </div>
             )}
 
@@ -6789,7 +6494,7 @@ export default function DetectorPage() {
               <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
                 <div className="px-6 py-5 grid sm:grid-cols-3 gap-5 text-xs leading-relaxed">
                   {[
-                    { badge: "PS", bg: "#1b3a6b", label: "Perplexity & Stylometry", text: "25 signals across 5 tiers: lexical vocab density, transitions, bigrams; structural paragraph openers, conclusion clustering; stylistic hedging, clause stacking, passive voice; surface TTR, MTLD, nominalization; semantic self-similarity, tone flatness, vague citations, discourse schema; idea repetition (within-paragraph Jaccard overlap — detects AI restating the same point 2–3× per paragraph)." },
+                    { badge: "PS", bg: "#1b3a6b", label: "Perplexity & Stylometry", text: "24 signals across 5 tiers: lexical vocab density, transitions, bigrams; structural paragraph openers, conclusion clustering; stylistic hedging, clause stacking, passive voice; surface TTR, MTLD, nominalization; semantic self-similarity, tone flatness, vague citations, discourse schema." },
                     { badge: "BC", bg: "#16a34a", label: "Burstiness & Cognitive", text: "8 signals: sentence-length CV (burstiness), short-sentence absence, rhetorical variation, contractions, personal anecdote, numeric specificity. Personal anecdotes and precise numbers reduce AI score (human markers). CV < 0.22 = uniform AI rhythm; CV > 0.42 = natural human variation." },
                     { badge: "NP", bg: "#7c3aed", label: "Neural Perplexity", text: "LLM-based analysis using Binoculars-style reasoning: token predictability (primary signal — each word's statistical expected-ness), semantic smoothness, structural uniformity, DetectGPT-style perturbation resistance (does text sit at a local probability maximum?), and bimodal sentence distribution detection for mixed/hybrid authorship. Explicitly calibrated for ESL and Philippine academic context to reduce false positives." },
                   ].map(({ badge, bg, label, text }) => (
