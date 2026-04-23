@@ -1651,7 +1651,7 @@ function ideaRepetitionScore(text: string, sentences: string[]): { score: number
   return { score, repetitivePairs: totalPairs, details };
 }
 
-function computeRepetitionFromSets(sets: Set<string>[], count: number): { repetitivePairs: number } {
+function computeRepetitionFromSets(sets: Set<string>[], count: number): { score: number; repetitivePairs: number; details: string } {
   let pairs = 0;
   const THRESHOLD = 0.60;
   for (let i = 0; i < sets.length - 1; i++) {
@@ -1662,7 +1662,18 @@ function computeRepetitionFromSets(sets: Set<string>[], count: number): { repeti
       }
     }
   }
-  return { repetitivePairs: pairs };
+
+  let score = 0;
+  if (pairs >= 5) score = 22;
+  else if (pairs >= 3) score = 16;
+  else if (pairs >= 2) score = 10;
+  else if (pairs >= 1) score = 5;
+
+  const details = score > 0
+    ? `${pairs} sentence pair(s) with >60% content overlap detected. AI models restate the same idea multiple times in slightly different wording — a pattern human writers rarely produce.`
+    : "No significant idea repetition detected.";
+
+  return { score, repetitivePairs: pairs, details };
 }
 //  AI essays hedge every empirical claim: "may", "can often", "generally",
 //  "tends to", "in many cases", "it is possible". A human editorial uses hedges
