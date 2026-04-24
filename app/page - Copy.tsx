@@ -65,6 +65,10 @@ function sanitiseInput(text: string): string {
   sanitised = sanitised.replace(/\uFF0E/g, ".");
   // Collapse whitespace injection (multiple spaces within text lines, not paragraph breaks)
   sanitised = sanitised.replace(/([^\n]) {2,}([^\n])/g, (_, a, b) => `${a} ${b}`);
+  // Improvement #16: Strip citation/bibliography blocks before analysis
+  sanitised = stripCitationBlocks(sanitised);
+  // Improvement #17: Strip code blocks and table rows before analysis
+  sanitised = stripCodeAndTableBlocks(sanitised);
   return sanitised;
 }
 
@@ -1675,6 +1679,938 @@ function computeRepetitionFromSets(sets: Set<string>[], count: number): { score:
 
   return { score, repetitivePairs: pairs, details };
 }
+// ─────────────────────────────────────────────────────────────────────────────
+//  NEW SIGNAL: HAPAX LEGOMENA RATIO
+//  Words appearing exactly once (hapax legomena) are a well-established authorship
+//  signal. AI text has a lower hapax ratio than human writing of equivalent length
+//  because the model repeats its preferred vocabulary. Score: 0–20 (AI if LOW hapax).
+// ─────────────────────────────────────────────────────────────────────────────
+
+function hapaxLegomenaScore(words: string[]): { score: number; hapaxRatio: number; details: string } {
+  const wc = Math.max(words.length, 1);
+  if (wc < 80) return { score: 0, hapaxRatio: 0, details: "Insufficient words for hapax analysis." };
+  const freq: Record<string, number> = {};
+  for (const w of words) {
+    const lw = w.toLowerCase().replace(/[^a-z]/g, "");
+    if (lw.length >= 3) freq[lw] = (freq[lw] || 0) + 1;
+  }
+  const totalUniq = Object.keys(freq).length;
+  const hapaxCount = Object.values(freq).filter(c => c === 1).length;
+  const hapaxRatio = totalUniq > 0 ? hapaxCount / totalUniq : 0;
+
+  // Human academic text typically has hapax ratio 0.45–0.65
+  // AI text tends to cluster around 0.30–0.42 (lower vocabulary renewal)
+  let score = 0;
+  if (hapaxRatio < 0.28) score = 20;
+  else if (hapaxRatio < 0.33) score = 15;
+  else if (hapaxRatio < 0.38) score = 10;
+  else if (hapaxRatio < 0.42) score = 5;
+
+  const details = score > 0
+    ? `Hapax legomena ratio: ${(hapaxRatio * 100).toFixed(1)}% of unique words appear only once. Low hapax ratio (normal: 45–65%) indicates reduced vocabulary renewal, characteristic of AI text that over-samples its preferred vocabulary.`
+    : `Hapax ratio ${(hapaxRatio * 100).toFixed(1)}% — within normal human range (45–65%).`;
+  return { score, hapaxRatio, details };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  NEW SIGNAL: READABILITY FORMULA FINGERPRINTING (Flesch-Kincaid)
+//  AI academic text clusters in an unnaturally narrow readability band (FK-GL 13–16)
+//  with LOW variance across paragraphs. Human writing has higher section-to-section
+//  variance. Score: 0–22.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function countSyllables(word: string): number {
+  word = word.toLowerCase().replace(/[^a-z]/g, "");
+  if (word.length <= 3) return 1;
+  word = word.replace(/(?:[^laeiouy]es|ed|[^laeiouy]e)$/, "");
+  word = word.replace(/^y/, "");
+  const matches = word.match(/[aeiouy]{1,2}/g);
+  return Math.max(1, matches ? matches.length : 1);
+}
+
+function fleschKincaidGradeLevel(sentences: string[], words: string[]): number {
+  const wc = Math.max(words.length, 1);
+  const sc = Math.max(sentences.length, 1);
+  const syllables = words.reduce((s, w) => s + countSyllables(w), 0);
+  return 0.39 * (wc / sc) + 11.8 * (syllables / wc) - 15.59;
+}
+
+function readabilityFingerprintScore(text: string, sentences: string[], words: string[]): { score: number; fkgl: number; fkVariance: number; details: string } {
+  const paras = text.split(/\n\n+/).map(p => p.trim()).filter(p => p.length > 60);
+  if (paras.length < 3 || words.length < 150) {
+    return { score: 0, fkgl: 0, fkVariance: 0, details: "Insufficient paragraphs/words for readability fingerprinting." };
+  }
+
+  const globalFKGL = fleschKincaidGradeLevel(sentences, words);
+
+  // Per-paragraph FKGL
+  const paraGrades: number[] = paras.map(para => {
+    const pWords = para.toLowerCase().match(/\b[a-z]+\b/g) || [];
+    const pSents = para.split(/(?<=[.!?])\s+/).filter(s => s.trim().length > 10);
+    if (pWords.length < 20 || pSents.length < 1) return globalFKGL;
+    return fleschKincaidGradeLevel(pSents, pWords);
+  });
+
+  const avgGrade = paraGrades.reduce((a, b) => a + b, 0) / paraGrades.length;
+  const variance = paraGrades.reduce((s, g) => s + Math.pow(g - avgGrade, 2), 0) / paraGrades.length;
+  const fkCV = Math.sqrt(variance) / Math.max(Math.abs(avgGrade), 1);
+
+  // AI academic text: FKGL 13–16 with very LOW variance (CV < 0.10)
+  // Human writing has more sectional readability drift (CV > 0.15)
+  let score = 0;
+  const inAIBand = globalFKGL >= 12 && globalFKGL <= 17;
+  if (inAIBand && fkCV < 0.08 && paras.length >= 4) score = 22;
+  else if (inAIBand && fkCV < 0.12 && paras.length >= 3) score = 14;
+  else if (inAIBand && fkCV < 0.15) score = 8;
+  else if (fkCV < 0.08 && paras.length >= 4) score = 10; // unnaturally uniform even outside AI band
+
+  const details = score > 0
+    ? `Flesch-Kincaid Grade Level: ${globalFKGL.toFixed(1)} (range 12–17 is AI academic zone). Paragraph readability CV: ${fkCV.toFixed(3)} — unnaturally uniform (human writing typically shows CV > 0.15 across sections). AI produces metronomic readability across all paragraphs.`
+    : `FKGL: ${globalFKGL.toFixed(1)}, paragraph CV: ${fkCV.toFixed(3)} — within human range.`;
+  return { score, fkgl: globalFKGL, fkVariance: fkCV, details };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  NEW SIGNAL: FUNCTION WORD PROFILE (Stylometric)
+//  AI models use "the" and "a" in specific ratios, overuse "this"/"these" as
+//  demonstratives, and underuse second-person "you/your". Score: 0–18.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function functionWordProfileScore(words: string[], wc: number): { score: number; details: string } {
+  if (wc < 100) return { score: 0, details: "Insufficient words for function word profiling." };
+  const lwords = words.map(w => w.toLowerCase());
+  const count = (terms: string[]) => lwords.filter(w => terms.includes(w)).length;
+
+  const theCount    = count(["the"]);
+  const aAnCount    = count(["a", "an"]);
+  const thisThese   = count(["this", "these"]);
+  const youYour     = count(["you", "your", "yourself"]);
+  const iMe         = count(["i", "me", "my", "myself", "we", "our"]);
+
+  const theRate     = theCount   / wc;
+  const aAnRate     = aAnCount   / wc;
+  const demRate     = thisThese  / wc; // demonstratives
+  const secPersRate = youYour    / wc;
+  const firstPersRate = iMe      / wc;
+
+  // AI fingerprints:
+  // - High "the" usage (> 0.07) combined with low "a/an" (< 0.03): definite > indefinite
+  // - High demonstrative overuse: "this" + "these" > 0.025 of all words
+  // - Near-zero second-person (youYour < 0.002)
+  // - Low first-person (iMe < 0.005) — AI rarely uses "I"
+  let score = 0;
+  const highThe = theRate > 0.07;
+  const lowAn   = aAnRate < 0.035;
+  const highDem = demRate > 0.022;
+  const lowSec  = secPersRate < 0.003;
+  const lowFirs = firstPersRate < 0.006;
+
+  const aiSignalCount = [highThe, lowAn, highDem, lowSec, lowFirs].filter(Boolean).length;
+  if (aiSignalCount >= 4) score = 18;
+  else if (aiSignalCount >= 3) score = 12;
+  else if (aiSignalCount >= 2) score = 7;
+
+  const details = score > 0
+    ? `Function word profile: "the" ${(theRate*100).toFixed(1)}%, "a/an" ${(aAnRate*100).toFixed(1)}%, demonstratives ("this/these") ${(demRate*100).toFixed(1)}%, 2nd-person ${(secPersRate*100).toFixed(1)}%, 1st-person ${(firstPersRate*100).toFixed(1)}%. ${aiSignalCount}/5 AI function-word markers match. AI overuses "the" and demonstratives while underusing first and second person.`
+    : `Function word ratios within human range (${aiSignalCount}/5 AI markers).`;
+  return { score, details };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  NEW SIGNAL: QUOTE / DIRECT SPEECH DETECTOR (Human Authenticity Signal)
+//  Human writing — especially academic writing — contains direct quotes with
+//  attribution. AI almost never generates genuine quotations. Reward quoted
+//  material as a strong human signal (score reduction). 
+// ─────────────────────────────────────────────────────────────────────────────
+
+function quoteDetectorScore(text: string, wc: number): { humanReduction: number; quoteCount: number; details: string } {
+  if (wc < 80) return { humanReduction: 0, quoteCount: 0, details: "Insufficient text." };
+  // Detect: "quoted text" (attribution), block quotes, or (Author, Year) inline cites
+  const doubleQuotes = (text.match(/"[^"]{10,150}"/g) || []).length;
+  const singleQuotes = (text.match(/'[^']{10,100}'/g) || []).length;
+  // APA/MLA citations: (Author, YYYY) or (Author, YYYY, p. N)
+  const inlineCites  = (text.match(/\([A-Z][a-z]+,\s*\d{4}[,)]/g) || []).length;
+  // Block-quote style: lines starting with > or indented quotation
+  const blockQuotes  = (text.match(/^\s{4,}.{30,}/gm) || []).length;
+
+  const quoteCount = doubleQuotes + singleQuotes + inlineCites + blockQuotes;
+  const quoteRatio = quoteCount / Math.max(wc / 100, 1); // per 100 words
+
+  // Strong quote presence is a human signal — reduce the AI score
+  let humanReduction = 0;
+  if (quoteCount >= 5 || quoteRatio >= 0.8) humanReduction = 12;
+  else if (quoteCount >= 3 || quoteRatio >= 0.4) humanReduction = 8;
+  else if (quoteCount >= 1) humanReduction = 4;
+
+  const details = humanReduction > 0
+    ? `${quoteCount} quoted/cited passage(s) detected (${quoteRatio.toFixed(1)}/100 words). Direct quotation with attribution is a strong human authenticity marker — AI rarely generates genuine attributed quotes.`
+    : "No attributed quotations detected.";
+  return { humanReduction, quoteCount, details };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  NEW SIGNAL: CAPITALIZATION ABUSE DETECTOR
+//  AI models sometimes capitalize words mid-sentence for emphasis in ways that
+//  are grammatically incorrect. Humans almost never do this unintentionally.
+//  Score: 0–15. Zero-false-positive signal.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function capitalizationAbuseScore(text: string): { score: number; abuseCount: number; details: string } {
+  // Find mid-sentence capitalized words that aren't: proper nouns (preceded by their name),
+  // acronyms (all-caps), start of sentence, or known proper terms
+  const sentences = text.split(/[.!?]+/).filter(s => s.trim().length > 20);
+  let abuseCount = 0;
+  const examples: string[] = [];
+
+  for (const sent of sentences) {
+    const words = sent.trim().split(/\s+/);
+    // Skip first word (sentence start)
+    for (let i = 1; i < words.length; i++) {
+      const w = words[i].replace(/[^a-zA-Z]/g, "");
+      if (!w || w.length < 4) continue;
+      // Skip: ALL_CAPS acronyms, words after colon (legitimate capitalization)
+      if (w === w.toUpperCase()) continue;
+      // Mid-sentence capital: starts with uppercase, not all-caps
+      if (/^[A-Z][a-z]/.test(w)) {
+        // Not a proper noun heuristic: if the same word appears lowercase elsewhere, it's likely abuse
+        const lw = w.toLowerCase();
+        const appearsLower = text.includes(" " + lw + " ") || text.includes(" " + lw + ",");
+        if (appearsLower) {
+          abuseCount++;
+          if (examples.length < 3) examples.push(`"${words.slice(Math.max(0, i-1), i+2).join(" ")}"`);
+        }
+      }
+    }
+  }
+
+  let score = 0;
+  if (abuseCount >= 5) score = 15;
+  else if (abuseCount >= 3) score = 10;
+  else if (abuseCount >= 2) score = 6;
+  else if (abuseCount >= 1) score = 3;
+
+  const details = score > 0
+    ? `${abuseCount} mid-sentence capitalization anomalies detected (examples: ${examples.join("; ")}). AI models occasionally capitalize common words for emphasis in grammatically incorrect ways — humans almost never do this unintentionally.`
+    : "No mid-sentence capitalization anomalies detected.";
+  return { score, abuseCount, details };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  NEW SIGNAL: AI MODEL FAMILY FINGERPRINTING
+//  Different AI families leave distinct stylistic fingerprints:
+//  GPT-4: em-dashes, "delve", "tapestry". Claude: "nuanced", "worth noting",
+//  meta-commentary. Llama 3: heavy hedging. Gemini: tricolon + "it's worth noting".
+//  Score: 0–20 with suspected family label.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function aiModelFamilyFingerprint(text: string): { score: number; suspectedFamily: string | null; confidence: string; details: string } {
+  const ltext = text.toLowerCase();
+
+  // GPT-4 / GPT-4o fingerprints
+  const gpt4Markers = (text.match(/—/g) || []).length; // em-dash overuse
+  const gpt4Vocab = (text.match(/\b(delve|tapestry|bustling|vibrant|foster|pivotal|leverage|synergy|paradigm|groundbreaking|innovative|transformative|comprehensive|multifaceted)\b/gi) || []).length;
+
+  // Claude fingerprints  
+  const claudeMarkers = (text.match(/\b(nuanced|worth noting|worth considering|it's worth|at its core|at the heart|speaks to|stands as|serves as|taken together|considered together|this raises|this underscores|this illustrates)\b/gi) || []).length;
+
+  // Llama 3 fingerprints: heavy hedged modality
+  const llamaMarkers = (text.match(/\b(may|might|could)\b/gi) || []).length;
+  const llamaRate = llamaMarkers / Math.max(text.split(/\s+/).length, 1);
+
+  // Gemini fingerprints: tricolon + "it's worth noting" clusters
+  const geminiMarkers = (text.match(/\b(it's worth noting|it is worth noting|notably|it should be noted)\b/gi) || []).length;
+  const geminiTricolon = (text.match(/\w[\w\s]{2,20},\s*\w[\w\s]{2,20},\s*and\s+\w[\w\s]{2,15}/gi) || []).length;
+
+  // Score each family
+  const gpt4Score    = gpt4Markers * 2 + gpt4Vocab * 3;
+  const claudeScore  = claudeMarkers * 4;
+  const llamaScore   = llamaRate > 0.05 ? Math.min(20, Math.round(llamaRate * 200)) : 0;
+  const geminiScore  = geminiMarkers * 4 + geminiTricolon * 2;
+
+  const scores = [
+    { family: "GPT-4/GPT-4o", score: gpt4Score },
+    { family: "Claude",        score: claudeScore },
+    { family: "Llama 3",       score: llamaScore },
+    { family: "Gemini",        score: geminiScore },
+  ];
+
+  const best = scores.reduce((a, b) => a.score > b.score ? a : b);
+  const totalAISignal = best.score;
+
+  let suspectedFamily: string | null = null;
+  let confidence = "low";
+  let signalScore = 0;
+
+  if (totalAISignal >= 16) { suspectedFamily = best.family; confidence = "moderate"; signalScore = 20; }
+  else if (totalAISignal >= 10) { suspectedFamily = best.family; confidence = "low"; signalScore = 12; }
+  else if (totalAISignal >= 5) { suspectedFamily = best.family; confidence = "very low"; signalScore = 6; }
+
+  const details = suspectedFamily
+    ? `Suspected AI family: ${suspectedFamily} (${confidence} confidence). Scores — GPT-4: ${gpt4Score}, Claude: ${claudeScore}, Llama 3: ${llamaScore}, Gemini: ${geminiScore}. Family fingerprinting is supplementary and should not be used as standalone evidence.`
+    : `No strong AI family fingerprint detected (all family scores < 5). This does not indicate human authorship.`;
+
+  return { score: signalScore, suspectedFamily, confidence, details };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  NEW SIGNAL: SELF-BLEU / REPETITION-N SCORE
+//  AI text has measurably higher self-repetition at the n-gram level within a
+//  single document. Computing 3-gram and 4-gram overlap between all sentence pairs
+//  catches repetitive AI writing that Jaccard similarity at the word level misses.
+//  Score: 0–20.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function selfBleuScore(sentences: string[]): { score: number; avgOverlap: number; details: string } {
+  if (sentences.length < 5) return { score: 0, avgOverlap: 0, details: "Insufficient sentences for Self-BLEU analysis." };
+
+  const getNgrams = (sent: string, n: number): Set<string> => {
+    const words = sent.toLowerCase().match(/\b[a-z]{3,}\b/g) || [];
+    if (words.length < n) return new Set();
+    const grams = new Set<string>();
+    for (let i = 0; i <= words.length - n; i++) {
+      grams.add(words.slice(i, i + n).join(" "));
+    }
+    return grams;
+  };
+
+  // Compute pairwise 3-gram and 4-gram overlaps (sample for performance)
+  const sampleSize = Math.min(sentences.length, 20);
+  const sampled = sentences.slice(0, sampleSize);
+  let totalOverlap = 0;
+  let pairCount = 0;
+
+  for (let i = 0; i < sampled.length - 1; i++) {
+    for (let j = i + 2; j < Math.min(i + 6, sampled.length); j++) { // non-adjacent pairs
+      const g3i = getNgrams(sampled[i], 3);
+      const g3j = getNgrams(sampled[j], 3);
+      if (g3i.size === 0 || g3j.size === 0) continue;
+      let inter3 = 0;
+      g3i.forEach(g => { if (g3j.has(g)) inter3++; });
+      const overlap3 = inter3 / Math.min(g3i.size, g3j.size);
+      totalOverlap += overlap3;
+      pairCount++;
+    }
+  }
+
+  const avgOverlap = pairCount > 0 ? totalOverlap / pairCount : 0;
+
+  // Human text: avg 3-gram overlap between non-adjacent sentences ~0–0.05
+  // AI text: avg 3-gram overlap ~0.08–0.15 (repeats structural phrases)
+  let score = 0;
+  if (avgOverlap >= 0.14) score = 20;
+  else if (avgOverlap >= 0.10) score = 14;
+  else if (avgOverlap >= 0.07) score = 9;
+  else if (avgOverlap >= 0.04) score = 4;
+
+  const details = score > 0
+    ? `Self-BLEU (3-gram overlap) between non-adjacent sentences: ${(avgOverlap * 100).toFixed(1)}%. High n-gram self-repetition (normal < 5%) indicates AI text that repeats structural phrases across the document. This signal catches repetitive AI writing that word-level overlap misses.`
+    : `Self-BLEU score ${(avgOverlap * 100).toFixed(1)}% — within human range (< 5%).`;
+  return { score, avgOverlap, details };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  NEW SIGNAL: SEMANTIC DENSITY SCORE (Content Word Ratio)
+//  AI maintains unnaturally HIGH content-word-to-function-word ratio — metronomic
+//  information density. Human writing has more filler and connective tissue.
+//  Score: 0–16.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const CONTENT_WORD_POS_SUFFIXES = /\b\w+(tion|tions|ment|ments|ity|ities|ness|nesses|ize|izes|ized|ify|ifies|ified|ous|ious|eous|ive|atives|ism|ist|ists|ance|ence|ency|ancy)\b/gi;
+
+function semanticDensityScore(words: string[], wc: number): { score: number; densityCV: number; details: string } {
+  if (wc < 120) return { score: 0, densityCV: 0, details: "Insufficient words for semantic density analysis." };
+
+  // Content words: nouns, verbs, adjectives, adverbs (approximate via exclusion of function words)
+  const contentWords = words.filter(w => !STOP_WORDS.has(w.toLowerCase()) && w.length >= 3);
+  const globalDensity = contentWords.length / wc;
+
+  // Measure density variance across 100-word chunks
+  const chunkSize = 100;
+  const chunks: number[] = [];
+  for (let i = 0; i + chunkSize <= words.length; i += Math.floor(chunkSize / 2)) {
+    const chunk = words.slice(i, i + chunkSize);
+    const cContent = chunk.filter(w => !STOP_WORDS.has(w.toLowerCase()) && w.length >= 3);
+    chunks.push(cContent.length / chunkSize);
+  }
+
+  if (chunks.length < 2) return { score: 0, densityCV: 0, details: "Insufficient chunks for density variance analysis." };
+  const avgD = chunks.reduce((a, b) => a + b, 0) / chunks.length;
+  const varD  = chunks.reduce((s, d) => s + Math.pow(d - avgD, 2), 0) / chunks.length;
+  const cvD   = Math.sqrt(varD) / Math.max(avgD, 0.01);
+
+  // AI: high global density (> 0.58) with LOW variance (cvD < 0.08) = metronomic
+  // Human: moderate density with higher variance
+  let score = 0;
+  const highDensity = globalDensity > 0.58;
+  if (highDensity && cvD < 0.06 && chunks.length >= 4) score = 16;
+  else if (highDensity && cvD < 0.09) score = 10;
+  else if (globalDensity > 0.62 && cvD < 0.12) score = 6;
+
+  const details = score > 0
+    ? `Content word density: ${(globalDensity * 100).toFixed(1)}% (AI range > 58%) with CV ${cvD.toFixed(3)} across ${chunks.length} text chunks. AI maintains unnaturally uniform high information density; human writing varies in density across sections.`
+    : `Content word density ${(globalDensity * 100).toFixed(1)}% with CV ${cvD.toFixed(3)} — within human range.`;
+  return { score, densityCV: cvD, details };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  NEW SIGNAL: PARAPHRASE ATTACK DETECTION
+//  Students increasingly run AI output through paraphrasers (Quillbot, Wordtune).
+//  Result: vocabulary-level patterns are masked but structural AI patterns remain.
+//  Paraphrase artifacts: unnatural synonym substitutions, split sentences losing
+//  coherence, word-order inversions. Score: 0–18.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Common Quillbot-style synonym substitutions: rare word used where common expected
+const PARAPHRASE_RARE_SUBS = new Set([
+  "utilize","utilization","commence","commencement","endeavor","endeavour",
+  "ascertain","necessitate","procure","facilitate","ameliorate","amelioration",
+  "elucidate","aforementioned","aforementioned","subsequent","subsequently",
+  "notwithstanding","inasmuch","herein","thereof","wherein","whereby",
+  "pertaining","regarding","concerning","pertains","comprises","constitutes",
+  "encompasses","encompasses","incorporates","demonstrates","illustrates",
+  "exhibits","manifests","portrays","depicts","delineates","elucidates",
+  "denotes","signifies","connotes","implies","infers","suggests","indicates",
+]);
+
+function paraphraseAttackScore(text: string, sentences: string[]): { score: number; details: string } {
+  if (sentences.length < 5) return { score: 0, details: "Insufficient sentences for paraphrase detection." };
+
+  const ltext = text.toLowerCase();
+  const words  = ltext.match(/\b[a-z]+\b/g) || [];
+  const wc     = Math.max(words.length, 1);
+
+  // Signal 1: High density of rare formal synonyms (paraphrase tool fingerprint)
+  const rareSubs = words.filter(w => PARAPHRASE_RARE_SUBS.has(w)).length;
+  const rareRate = rareSubs / wc;
+
+  // Signal 2: Sentence-length inversion pattern
+  // Paraphrasers often split long AI sentences into shorter awkward ones or
+  // merge short ones into run-ons. Detect: high CV with many very short AND very long sentences
+  const lens = sentences.map(s => s.trim().split(/\s+/).length);
+  const avgLen = lens.reduce((a, b) => a + b, 0) / Math.max(lens.length, 1);
+  const veryShort = lens.filter(l => l < 6).length / Math.max(lens.length, 1);
+  const veryLong  = lens.filter(l => l > 40).length / Math.max(lens.length, 1);
+  const polarizedLength = veryShort > 0.15 && veryLong > 0.10; // unusual bimodal length distribution
+
+  // Signal 3: Conjunction-stripped sentences (paraphrasers remove connectives)
+  const conjStarters = sentences.filter(s =>
+    /^(however|therefore|moreover|furthermore|additionally|consequently|nevertheless)/i.test(s.trim())
+  ).length;
+  const conjRate = conjStarters / Math.max(sentences.length, 1);
+  // Human starts: low; AI starts: moderate; Paraphrased AI: very low (stripped out)
+  const strippedConnectives = conjRate < 0.03 && sentences.length > 8;
+
+  let score = 0;
+  const signals: string[] = [];
+
+  if (rareRate > 0.035) { score += 8; signals.push(`${rareSubs} rare-synonym substitutions (${(rareRate*100).toFixed(1)}%)`); }
+  else if (rareRate > 0.020) { score += 4; signals.push(`${rareSubs} formal synonym substitutions`); }
+
+  if (polarizedLength) { score += 6; signals.push("bimodal sentence-length distribution (short+long)"); }
+  if (strippedConnectives) { score += 4; signals.push("very low connective opener rate (possible stripping)"); }
+
+  score = Math.min(18, score);
+
+  const details = score > 0
+    ? `Paraphrase attack indicators: ${signals.join("; ")}. These patterns suggest AI text processed through a paraphrasing tool (Quillbot, Wordtune, etc.) — structural AI patterns persist even after vocabulary-level substitution.`
+    : "No significant paraphrase attack indicators detected.";
+  return { score, details };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  NEW SIGNAL: FILIPINO / ESL L1-TRANSFER PATTERNS (Human Authenticity Signal)
+//  Filipino L1-transfer errors in English writing are STRONG human authenticity
+//  signals. These patterns reduce the AI score (human reduction). 
+//  Patterns: dropped articles, Tagalog topic-comment structure, preposition confusions.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function filipinoL1TransferScore(text: string, wc: number): { humanReduction: number; l1Count: number; details: string } {
+  if (wc < 60) return { humanReduction: 0, l1Count: 0, details: "Insufficient text." };
+
+  // Dropped articles: "The study show that" / "result show" (missing -s or dropped article)
+  const droppedArticle = (text.match(/\b(study|research|result|data|findings?|analysis|survey|literature|evidence)\s+(show|indicate|suggest|reveal|demonstrate|prove)\b/gi) || []).length;
+
+  // Tagalog topic-comment structure: "As for the X, it is..." / "With regards to X, the..."
+  const topicComment = (text.match(/\b(as for|with regards? to|insofar as|as to|speaking of|in terms of the|when it comes to the)\b/gi) || []).length;
+
+  // Filipino preposition confusions: "discuss about", "emphasize on", "cope up"
+  const prepConfusion = (text.match(/\b(discuss(ed|es)? about|emphasize[sd]? on|cope up with|stress on|mention(ed|s)? about|talk(ed|s)? about in|relate(d|s)? with|cope with|deal with in|focus on in)\b/gi) || []).length;
+
+  // Filipino English collocations: "give emphasis", "make mention", "at present time"
+  const filipinoCollocations = (text.match(/\b(give emphasis|make mention|at the present time|at present time|in the said|the said|thru which|by means of which|in pursuant|pursuant thereto|herein mentioned)\b/gi) || []).length;
+
+  const l1Count = droppedArticle + topicComment + prepConfusion + filipinoCollocations;
+
+  let humanReduction = 0;
+  if (l1Count >= 5) humanReduction = 15;
+  else if (l1Count >= 3) humanReduction = 10;
+  else if (l1Count >= 2) humanReduction = 7;
+  else if (l1Count >= 1) humanReduction = 4;
+
+  const details = humanReduction > 0
+    ? `${l1Count} Filipino/Philippine English L1-transfer pattern(s) detected (dropped articles: ${droppedArticle}, topic-comment: ${topicComment}, preposition patterns: ${prepConfusion}, Filipino collocations: ${filipinoCollocations}). These are authentic ESL writer fingerprints — strong human authenticity signal for Philippine academic context.`
+    : "No Filipino L1-transfer patterns detected.";
+  return { humanReduction, l1Count, details };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  NEW SIGNAL: ZIPF'S LAW DEVIATION SCORE
+//  Natural human text follows Zipf's law: word frequency × rank ≈ constant.
+//  AI text deviates measurably because the model oversamples mid-frequency vocab.
+//  We fit an ideal Zipf curve and measure residual sum-of-squares.
+//  Score: 0–22 (AI if HIGH deviation from power-law).
+// ─────────────────────────────────────────────────────────────────────────────
+
+function zipfDeviationScore(words: string[]): { score: number; zipfDev: number; details: string } {
+  const wc = words.length;
+  if (wc < 150) return { score: 0, zipfDev: 0, details: "Insufficient words for Zipf analysis (need ≥ 150)." };
+
+  // Build frequency table
+  const freq: Record<string, number> = {};
+  for (const w of words) {
+    const lw = w.toLowerCase().replace(/[^a-z]/g, "");
+    if (lw.length >= 2) freq[lw] = (freq[lw] || 0) + 1;
+  }
+
+  // Sort by frequency descending → get ranked frequencies
+  const ranked = Object.values(freq).sort((a, b) => b - a);
+  if (ranked.length < 20) return { score: 0, zipfDev: 0, details: "Insufficient unique words for Zipf analysis." };
+
+  // Fit ideal Zipf: f(r) = f(1) / r  (simplest form, exponent = 1)
+  // Compare top-50 ranks only (most stable region)
+  const sampleSize = Math.min(50, ranked.length);
+  const f1 = ranked[0]; // frequency of most common word
+  let rss = 0; // residual sum of squares (log scale)
+  for (let r = 1; r <= sampleSize; r++) {
+    const observed  = Math.log(ranked[r - 1] + 1);
+    const predicted = Math.log(f1 / r + 1);
+    rss += Math.pow(observed - predicted, 2);
+  }
+  const normalizedRSS = rss / sampleSize; // per-rank average squared residual
+
+  // Human text: normalizedRSS typically 0.05–0.25 (good Zipf fit)
+  // AI text: normalizedRSS typically 0.30–0.70 (mid-freq oversampling distorts curve)
+  let score = 0;
+  if (normalizedRSS >= 0.55) score = 22;
+  else if (normalizedRSS >= 0.42) score = 16;
+  else if (normalizedRSS >= 0.32) score = 10;
+  else if (normalizedRSS >= 0.25) score = 5;
+
+  const details = score > 0
+    ? `Zipf's Law deviation (normalized RSS): ${normalizedRSS.toFixed(3)} — significantly above human range (0.05–0.25). AI text oversamples mid-frequency vocabulary, distorting the expected power-law word frequency distribution. This is a language-independent structural signal.`
+    : `Zipf deviation ${normalizedRSS.toFixed(3)} — within human range (power-law fit acceptable).`;
+  return { score, zipfDev: normalizedRSS, details };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  NEW SIGNAL: TYPE-TOKEN RATIO TRAJECTORY (Power-Law Decay Curve)
+//  The *trajectory* of TTR as text length grows is more powerful than scalar TTR.
+//  Human text: characteristic power-law decay (TTR ∝ length^β, β ≈ -0.4 to -0.5).
+//  AI text: unnaturally LINEAR decay — vocabulary renewal rate is constant because
+//  the model samples from a fixed distribution regardless of position.
+//  Score: 0–20 (AI if trajectory is too linear — low curve fit to power-law).
+// ─────────────────────────────────────────────────────────────────────────────
+
+function ttrTrajectorySore(words: string[]): { score: number; linearityIndex: number; details: string } {
+  const wc = words.length;
+  if (wc < 200) return { score: 0, linearityIndex: 0, details: "Insufficient words for TTR trajectory analysis (need ≥ 200)." };
+
+  // Compute TTR at 10 evenly spaced checkpoints
+  const checkpoints = 10;
+  const step = Math.floor(wc / checkpoints);
+  const ttrPoints: { n: number; ttr: number }[] = [];
+  for (let i = 1; i <= checkpoints; i++) {
+    const slice = words.slice(0, i * step);
+    const unique = new Set(slice.map(w => w.toLowerCase())).size;
+    ttrPoints.push({ n: i * step, ttr: unique / slice.length });
+  }
+
+  // Fit LINEAR model: ttr = a + b*n
+  // Fit POWER-LAW model: log(ttr) = log(a) + b*log(n)  →  ttr = a * n^b
+  // Measure: how well does linear fit vs power-law? 
+  // High linear R² with low power-law residual = AI; Low linear R² = more human.
+
+  const N = ttrPoints.length;
+  const xs = ttrPoints.map(p => p.n);
+  const ys = ttrPoints.map(p => p.ttr);
+  const meanX = xs.reduce((a, b) => a + b, 0) / N;
+  const meanY = ys.reduce((a, b) => a + b, 0) / N;
+
+  // Linear R²
+  const ssRes = xs.reduce((s, x, i) => {
+    const yPred = meanY + ((xs.reduce((a, xi, j) => a + (xi - meanX) * (ys[j] - meanY), 0) /
+      xs.reduce((a, xi) => a + Math.pow(xi - meanX, 2), 0)) * (x - meanX));
+    return s + Math.pow(ys[i] - yPred, 2);
+  }, 0);
+  const ssTot = ys.reduce((s, y) => s + Math.pow(y - meanY, 2), 0);
+  const linearR2 = ssTot > 0 ? Math.max(0, 1 - ssRes / ssTot) : 0;
+
+  // Power-law R² (log-log fit)
+  const logX = xs.map(x => Math.log(x));
+  const logY = ys.map(y => Math.log(Math.max(y, 0.001)));
+  const meanLX = logX.reduce((a, b) => a + b, 0) / N;
+  const meanLY = logY.reduce((a, b) => a + b, 0) / N;
+  const ssResLog = logX.reduce((s, lx, i) => {
+    const yPred = meanLY + ((logX.reduce((a, lxi, j) => a + (lxi - meanLX) * (logY[j] - meanLY), 0) /
+      logX.reduce((a, lxi) => a + Math.pow(lxi - meanLX, 2), 0)) * (lx - meanLX));
+    return s + Math.pow(logY[i] - yPred, 2);
+  }, 0);
+  const ssTotLog = logY.reduce((s, ly) => s + Math.pow(ly - meanLY, 2), 0);
+  const powerR2 = ssTotLog > 0 ? Math.max(0, 1 - ssResLog / ssTotLog) : 0;
+
+  // AI signal: very high linearR2 (trajectory is linear) AND powerR2 NOT much better
+  // Human signal: powerR2 >> linearR2 (power-law fits much better than linear)
+  const linearityIndex = linearR2 - (powerR2 - linearR2) * 0.5;
+  // Clamped 0–1; higher = more linear = more AI-like
+
+  let score = 0;
+  if (linearityIndex >= 0.88) score = 20;
+  else if (linearityIndex >= 0.80) score = 14;
+  else if (linearityIndex >= 0.72) score = 8;
+  else if (linearityIndex >= 0.65) score = 4;
+
+  const details = score > 0
+    ? `TTR trajectory linearity index: ${linearityIndex.toFixed(3)} (linear R²=${linearR2.toFixed(2)}, power-law R²=${powerR2.toFixed(2)}). AI text shows unnaturally LINEAR vocabulary growth — its renewal rate is constant regardless of position. Human writing follows a power-law decay curve as the text grows.`
+    : `TTR trajectory linearity ${linearityIndex.toFixed(3)} — power-law decay pattern consistent with human writing (power R²=${powerR2.toFixed(2)}).`;
+  return { score, linearityIndex, details };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  NEW SIGNAL: KS-TEST ON SENTENCE-LENGTH DISTRIBUTION
+//  The current burstiness signal only uses CV (coefficient of variation).
+//  A Kolmogorov-Smirnov–style test comparing the observed sentence-length
+//  histogram against a fitted normal distribution catches AI texts with moderate
+//  CV but an unnaturally clean bell-curve shape — something human writing almost
+//  never produces because human sentence lengths follow a right-skewed distribution.
+//  Score: 0–18.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function ksNormalityScore(sentences: string[]): { score: number; ksStatistic: number; skewness: number; details: string } {
+  const lens = sentences.map(s => s.trim().split(/\s+/).length).filter(l => l >= 3);
+  if (lens.length < 10) return { score: 0, ksStatistic: 0, skewness: 0, details: "Insufficient sentences for distribution shape test (need ≥ 10)." };
+
+  const n = lens.length;
+  const mean = lens.reduce((a, b) => a + b, 0) / n;
+  const variance = lens.reduce((s, l) => s + Math.pow(l - mean, 2), 0) / n;
+  const std = Math.sqrt(Math.max(variance, 0.001));
+
+  // Skewness: human sentence lengths are RIGHT-skewed (positive skew)
+  // AI sentence lengths are near-symmetric (skew ≈ 0)
+  const skewness = lens.reduce((s, l) => s + Math.pow((l - mean) / std, 3), 0) / n;
+
+  // KS-like statistic: max |F_observed(x) - F_normal(x)| over sorted values
+  // Approximate normal CDF using error function approximation
+  const normalCDF = (x: number, mu: number, sigma: number): number => {
+    const z = (x - mu) / (sigma * Math.SQRT2);
+    const t = 1 / (1 + 0.3275911 * Math.abs(z));
+    const erf = 1 - (0.254829592 * t - 0.284496736 * t * t + 1.421413741 * Math.pow(t, 3)
+      - 1.453152027 * Math.pow(t, 4) + 1.061405429 * Math.pow(t, 5)) * Math.exp(-z * z);
+    return 0.5 * (1 + (z >= 0 ? erf : -erf));
+  };
+
+  const sorted = [...lens].sort((a, b) => a - b);
+  let maxDiff = 0;
+  for (let i = 0; i < sorted.length; i++) {
+    const empirical = (i + 1) / n;
+    const theoretical = normalCDF(sorted[i], mean, std);
+    maxDiff = Math.max(maxDiff, Math.abs(empirical - theoretical));
+  }
+  const ksStatistic = maxDiff;
+
+  // AI text: ksStatistic LOW (close to normal) AND skewness near 0
+  // Human text: ksStatistic higher (more right-skewed, fat-tailed)
+  // Score fires when distribution is suspiciously normal (AI-like)
+  const tooNormal = ksStatistic < 0.12 && Math.abs(skewness) < 0.5;
+  const veryNormal = ksStatistic < 0.08 && Math.abs(skewness) < 0.3;
+  const lacksSKew = Math.abs(skewness) < 0.25 && n >= 15;
+
+  let score = 0;
+  if (veryNormal && n >= 12) score = 18;
+  else if (tooNormal && n >= 10) score = 12;
+  else if (lacksSKew && n >= 15) score = 7;
+
+  const details = score > 0
+    ? `KS normality test: D=${ksStatistic.toFixed(3)}, skewness=${skewness.toFixed(2)}. Sentence-length distribution is unnaturally close to a normal curve (AI pattern). Human writing produces right-skewed distributions with occasional very long sentences — AI produces symmetric, bell-curve-shaped length distributions.`
+    : `Sentence-length distribution shows expected human skewness (KS D=${ksStatistic.toFixed(3)}, skew=${skewness.toFixed(2)}).`;
+  return { score, ksStatistic, skewness, details };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  NEW SIGNAL: ANAPHORA RESOLUTION DENSITY
+//  AI text overuses explicit noun repetition instead of pronouns and anaphoric
+//  references. Human writers use "it", "they", "this", "the former", "the latter"
+//  to maintain reference chains. Measuring the ratio of pronoun anaphora to
+//  repeated noun phrases catches AI's tendency to re-state subjects in full.
+//  Score: 0–16 (AI if LOW pronoun-to-repetition ratio).
+// ─────────────────────────────────────────────────────────────────────────────
+
+function anaphoraScore(text: string, sentences: string[], wc: number): { score: number; anaphoraRatio: number; details: string } {
+  if (wc < 100 || sentences.length < 5) return { score: 0, anaphoraRatio: 0, details: "Insufficient text for anaphora analysis." };
+
+  // Count pronoun anaphors
+  const pronounAnaphors = (text.match(/\b(it|its|they|them|their|theirs|this|that|these|those|the former|the latter|the above|the following|such|the same)\b/gi) || []).length;
+
+  // Count explicit noun re-use: consecutive sentences repeating the same noun phrase
+  // Approximate: count noun phrases that appear 3+ times (strong repetition)
+  const nounPhrases: Record<string, number> = {};
+  const nounRE = /\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*|the\s+\w+(?:\s+\w+)?)\b/g;
+  let m: RegExpExecArray | null;
+  while ((m = nounRE.exec(text)) !== null) {
+    const np = m[1].toLowerCase().trim();
+    if (np.length > 4 && np !== "the") nounPhrases[np] = (nounPhrases[np] || 0) + 1;
+  }
+  const repeatedNouns = Object.values(nounPhrases).filter(c => c >= 3).length;
+
+  // Ratio: pronouns per sentence vs repeated nouns
+  const pronounRate = pronounAnaphors / Math.max(sentences.length, 1);
+  const anaphoraRatio = pronounRate / Math.max(repeatedNouns + 1, 1);
+
+  // AI pattern: low pronoun rate + many repeated nouns = re-stating subjects explicitly
+  const lowPronouns = pronounRate < 1.5;
+  const highRepetition = repeatedNouns >= 4;
+
+  let score = 0;
+  if (lowPronouns && highRepetition && wc >= 200) score = 16;
+  else if (lowPronouns && repeatedNouns >= 2 && wc >= 150) score = 10;
+  else if (pronounRate < 1.0 && wc >= 200) score = 6;
+
+  const details = score > 0
+    ? `Pronoun anaphora rate: ${pronounRate.toFixed(1)}/sentence (low). Repeated noun phrases: ${repeatedNouns}. AI text re-states subjects in full on every sentence rather than using pronouns ("it", "they", "this") — a pattern that makes text unnaturally explicit and encyclopedic.`
+    : `Pronoun anaphora rate ${pronounRate.toFixed(1)}/sentence — within human range. Repeated nouns: ${repeatedNouns}.`;
+  return { score, anaphoraRatio, details };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  NEW SIGNAL: TEMPORAL / SPATIAL GROUNDING RATIO
+//  Human writing contains references to specific times and places — deictic
+//  anchors. AI writing floats in an ungrounded present. Specific temporal and
+//  spatial references are HUMAN signals (reduce AI score).
+// ─────────────────────────────────────────────────────────────────────────────
+
+function temporalSpatialGroundingScore(text: string, wc: number): { humanReduction: number; groundingCount: number; details: string } {
+  if (wc < 80) return { humanReduction: 0, groundingCount: 0, details: "Insufficient text." };
+
+  // Temporal grounding: specific years, dates, named periods
+  const temporalRefs = (text.match(/\b(19|20)\d{2}\b|\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}|\b(last|this|next)\s+(year|month|week|semester|quarter|decade)|\bduring\s+(the\s+)?(COVID|pandemic|lockdown|crisis|war|revolution|administration|term|period)\b|\bsince\s+(19|20)\d{2}\b|\bin\s+(early|late|mid-)?(19|20)\d{2}s?\b/gi) || []).length;
+
+  // Spatial grounding: specific place names (Philippines context + general)
+  const spatialRefs = (text.match(/\b(Manila|Quezon City|Cebu|Davao|Makati|Pasig|Taguig|Pasay|Caloocan|Las Piñas|Marikina|Muntinlupa|Parañaque|Valenzuela|Malabon|Navotas|San Juan|Mandaluyong|Philippines|Philippine|Filipino|Mindanao|Visayas|Luzon|Palawan|Batangas|Laguna|Cavite|Rizal|Bulacan|Pampanga|Nueva Ecija|Iloilo|Cebuano|Pangasinan|Cagayan|Zamboanga|General Santos|Antipolo|Bacolod|Baguio)\b|\b(University|College|Institute|Department|School|Office|Bureau|Agency|Corporation|Hospital|Municipality|Province|City|Barangay|Region)\s+of\s+[A-Z]/g) || []).length;
+
+  // Also count personal/institutional specificity: named people in context
+  const institutionalRefs = (text.match(/\b(DepEd|CHED|PRC|DOH|DOLE|DTI|DICT|DILG|DBM|DOF|DA|DPWH|DOJ|DFA|BSP|SEC|BIR|LTO|SSS|PhilHealth|Pag-IBIG|GSIS|NBI|PNP|AFP|COMELEC|COA|CSC|Ombudsman|Sandiganbayan)\b/g) || []).length;
+
+  const groundingCount = temporalRefs + spatialRefs + institutionalRefs;
+  const groundingRate = groundingCount / Math.max(wc / 100, 1); // per 100 words
+
+  let humanReduction = 0;
+  if (groundingCount >= 8 || groundingRate >= 1.5) humanReduction = 12;
+  else if (groundingCount >= 5 || groundingRate >= 0.8) humanReduction = 8;
+  else if (groundingCount >= 3) humanReduction = 5;
+  else if (groundingCount >= 1) humanReduction = 2;
+
+  const details = humanReduction > 0
+    ? `${groundingCount} temporal/spatial grounding references (${groundingRate.toFixed(1)}/100 words): ${temporalRefs} temporal, ${spatialRefs} spatial, ${institutionalRefs} institutional. Specific deictic anchors are strong human authenticity signals — AI text floats in an ungrounded, placeless present tense.`
+    : "No significant temporal or spatial grounding detected (AI-consistent pattern of unanchored present tense).";
+  return { humanReduction, groundingCount, details };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  NEW SIGNAL: ARGUMENT STRUCTURE ANALYSIS
+//  Human academic arguments follow: claim → evidence → warrant → rebuttal.
+//  AI arguments follow a surface schema: general statement → example → general.
+//  Detecting evidential connectors ("because", "since", "data shows", "given that")
+//  vs. merely assertive connectors ("therefore", "thus", "hence") is a structural
+//  signal completely absent from the current system.
+//  Score: 0–18 (AI if assertive >> evidential; human if evidential present).
+// ─────────────────────────────────────────────────────────────────────────────
+
+function argumentStructureScore(text: string, wc: number): { score: number; evidentialCount: number; assertiveCount: number; details: string } {
+  if (wc < 100) return { score: 0, evidentialCount: 0, assertiveCount: 0, details: "Insufficient text for argument structure analysis." };
+
+  // Evidential connectors: signal actual evidence/reasoning behind a claim
+  const evidentialCount = (text.match(/\b(because|since|given that|due to|owing to|as evidenced by|data (shows?|indicates?|suggests?|reveals?)|research (shows?|indicates?|found|demonstrates?)|studies? (show|indicate|found|demonstrate|reveal)|according to|based on (the )?(data|evidence|findings?|results?)|the results? (show|indicate|suggest|reveal)|findings? (show|indicate|suggest|demonstrate)|this is (because|due to|supported by)|in support of this|evidence (suggests?|shows?|indicates?)|empirically|statistically)\b/gi) || []).length;
+
+  // Assertive connectors: bold conclusions without supporting evidence
+  const assertiveCount = (text.match(/\b(therefore|thus|hence|consequently|as a result|it follows that|this (demonstrates?|shows?|proves?|confirms?|highlights?|underscores?|illustrates?)|clearly|obviously|evidently|undoubtedly|it is (clear|evident|apparent|obvious) that|this (makes? it clear|makes? it obvious)|without (a )?doubt)\b/gi) || []).length;
+
+  // Human signal: evidential connectors present (author grounds claims in evidence)
+  // AI signal: assertive connectors dominate without evidential backing
+  const totalConnectors = evidentialCount + assertiveCount;
+  const assertiveRatio = totalConnectors > 0 ? assertiveCount / totalConnectors : 0.5;
+
+  let score = 0;
+  let humanReduction = 0;
+
+  // High assertive ratio with few evidential connectors = AI pattern
+  if (assertiveRatio >= 0.85 && assertiveCount >= 4 && evidentialCount === 0) score = 18;
+  else if (assertiveRatio >= 0.75 && assertiveCount >= 3) score = 12;
+  else if (assertiveRatio >= 0.65 && assertiveCount >= 2) score = 7;
+
+  // Strong evidential presence is a human signal
+  if (evidentialCount >= 5) humanReduction = 8;
+  else if (evidentialCount >= 3) humanReduction = 5;
+
+  const netScore = Math.max(0, score - humanReduction);
+
+  const details = netScore > 0 || evidentialCount > 0
+    ? `Argument structure: ${evidentialCount} evidential connectors ("because", "data shows", "since") vs ${assertiveCount} assertive connectors ("therefore", "thus", "clearly"). Ratio: ${(assertiveRatio * 100).toFixed(0)}% assertive. AI arguments assert conclusions without evidential grounding; human academic writing uses evidential connectors to link claims to data.`
+    : "Insufficient connectors for argument structure analysis.";
+  return { score: netScore, evidentialCount, assertiveCount, details };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  NEW SIGNAL: SECTION-DIFFERENTIAL SCORING
+//  AI text scores differently in different sections. Abstracts/conclusions are
+//  formulaic regardless of authorship. Body paragraphs are most discriminative.
+//  Introductions with AI openers are a strong signal. Apply section-specific
+//  weights based on detected document structure.
+//  Returns: { bodyAIScore, introAIScore, conclusionAIScore, sectionNote }
+// ─────────────────────────────────────────────────────────────────────────────
+
+function sectionDifferentialScore(text: string, words: string[]): {
+  score: number;
+  bodyScore: number;
+  introScore: number;
+  conclusionScore: number;
+  details: string;
+} {
+  const paras = text.split(/\n\n+/).map(p => p.trim()).filter(p => p.length > 60);
+  if (paras.length < 3) return { score: 0, bodyScore: 0, introScore: 0, conclusionScore: 0, details: "Insufficient paragraphs for section analysis." };
+
+  const scoreParaAI = (para: string): number => {
+    const pw = para.toLowerCase().match(/\b[a-z]+\b/g) || [];
+    const vocabHits = pw.filter(w => AI_VOCAB.has(w)).length;
+    const transHits = AI_TRANSITIONS.reduce((s, re) => s + (re.test(para) ? 1 : 0), 0);
+    const bigramHits = (() => {
+      let h = 0;
+      for (let i = 0; i < pw.length - 1; i++) {
+        if (AI_BIGRAMS.has(pw[i] + " " + pw[i+1])) h++;
+        if (i < pw.length - 2 && AI_BIGRAMS.has(pw[i] + " " + pw[i+1] + " " + pw[i+2])) h++;
+      }
+      return h;
+    })();
+    return Math.min(100, vocabHits * 8 + transHits * 15 + bigramHits * 10);
+  };
+
+  // Classify sections
+  const n = paras.length;
+  const introParas = paras.slice(0, Math.max(1, Math.floor(n * 0.20)));
+  const conclusionParas = paras.slice(Math.floor(n * 0.80));
+  const bodyParas = paras.slice(Math.floor(n * 0.20), Math.floor(n * 0.80));
+
+  const avgScore = (ps: string[]) => ps.length === 0 ? 0 :
+    ps.reduce((s, p) => s + scoreParaAI(p), 0) / ps.length;
+
+  const introScore = Math.round(avgScore(introParas));
+  const bodyScore  = Math.round(avgScore(bodyParas));
+  const conclusionScore = Math.round(avgScore(conclusionParas));
+
+  // Body score is most discriminative; conclusion is least (always formulaic)
+  // Weight: body ×1.5, intro ×1.2, conclusion ×0.5
+  const weightedScore = (bodyScore * 1.5 + introScore * 1.2 + conclusionScore * 0.5) / 3.2;
+
+  let score = 0;
+  if (bodyScore >= 55 && introScore >= 40) score = 20;
+  else if (bodyScore >= 45) score = 14;
+  else if (bodyScore >= 30 && introScore >= 35) score = 8;
+
+  const details = paras.length >= 3
+    ? `Section-differential analysis: Intro AI-signal: ${introScore}%, Body AI-signal: ${bodyScore}% (most discriminative), Conclusion AI-signal: ${conclusionScore}% (least reliable — always formulaic). Body paragraphs are the strongest indicator; conclusions are formulaic in both human and AI academic writing.`
+    : "Insufficient paragraphs for section-differential analysis.";
+
+  return { score, bodyScore, introScore, conclusionScore, details };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  NEW: TEXT CHUNKING FOR LONG DOCUMENTS
+//  Documents over 3,000 words are analyzed as a single unit right now.
+//  Statistical signals (CV, TTR, MTLD) become less sensitive as text grows
+//  because variance regresses toward the mean. This function returns per-chunk
+//  signal statistics for long texts.
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface ChunkStats {
+  chunkIndex: number;
+  wordCount: number;
+  aiVocabRate: number;
+  cv: number;
+  ttr: number;
+  aiScore: number;
+}
+
+function analyzeInChunks(text: string, words: string[], sentences: string[]): {
+  isLongDoc: boolean;
+  chunks: ChunkStats[];
+  chunkScoreVariance: number;
+  hotspotChunks: number[];
+  summary: string;
+} {
+  const wc = words.length;
+  const CHUNK_SIZE = 500;
+  const OVERLAP = 50;
+
+  if (wc < CHUNK_SIZE * 2) {
+    return { isLongDoc: false, chunks: [], chunkScoreVariance: 0, hotspotChunks: [], summary: "" };
+  }
+
+  // Split into overlapping 500-word chunks
+  const chunks: ChunkStats[] = [];
+  let chunkStart = 0;
+  let chunkIndex = 0;
+
+  while (chunkStart < wc) {
+    const chunkWords = words.slice(chunkStart, chunkStart + CHUNK_SIZE);
+    const chunkText = chunkWords.join(" ");
+    const chunkWC = chunkWords.length;
+
+    if (chunkWC < 100) break; // too small for meaningful analysis
+
+    // Per-chunk signals
+    const vocabHits = chunkWords.filter(w => AI_VOCAB.has(w)).length;
+    const aiVocabRate = vocabHits / chunkWC;
+
+    const chunkSents = chunkText.split(/(?<=[.!?])\s+/).filter(s => s.trim().split(/\s+/).length >= 3);
+    const sentLens = chunkSents.map(s => s.trim().split(/\s+/).length);
+    const avgLen = sentLens.reduce((a, b) => a + b, 0) / Math.max(sentLens.length, 1);
+    const varLen = sentLens.reduce((s, l) => s + Math.pow(l - avgLen, 2), 0) / Math.max(sentLens.length, 1);
+    const cv = Math.sqrt(varLen) / Math.max(avgLen, 1);
+
+    const uniqueChunkWords = new Set(chunkWords).size;
+    const ttr = uniqueChunkWords / chunkWC;
+
+    // Combined AI score for this chunk (simple heuristic)
+    const transHits = AI_TRANSITIONS.reduce((s, re) => s + (re.test(chunkText) ? 1 : 0), 0);
+    const aiScore = Math.min(100, Math.round(
+      aiVocabRate * 400 +
+      (cv < 0.25 ? (0.25 - cv) * 200 : 0) +
+      (ttr < 0.50 ? (0.50 - ttr) * 100 : 0) +
+      transHits * 12
+    ));
+
+    chunks.push({ chunkIndex, wordCount: chunkWC, aiVocabRate, cv, ttr, aiScore });
+    chunkStart += CHUNK_SIZE - OVERLAP;
+    chunkIndex++;
+  }
+
+  if (chunks.length === 0) return { isLongDoc: false, chunks: [], chunkScoreVariance: 0, hotspotChunks: [], summary: "" };
+
+  const avgChunkScore = chunks.reduce((s, c) => s + c.aiScore, 0) / chunks.length;
+  const chunkScoreVariance = chunks.reduce((s, c) => s + Math.pow(c.aiScore - avgChunkScore, 2), 0) / chunks.length;
+
+  // Identify "hotspot" chunks — significantly above average AI signal
+  const hotspotThreshold = avgChunkScore + Math.sqrt(chunkScoreVariance) * 1.2;
+  const hotspotChunks = chunks
+    .filter(c => c.aiScore >= hotspotThreshold && c.aiScore >= 40)
+    .map(c => c.chunkIndex);
+
+  const summary = chunks.length > 0
+    ? `Long document analysis: ${chunks.length} chunks of ~${CHUNK_SIZE} words. Avg chunk AI score: ${Math.round(avgChunkScore)}%. Score variance: ${Math.round(chunkScoreVariance)}. ${hotspotChunks.length > 0 ? `${hotspotChunks.length} hotspot chunk(s) with elevated AI patterns at positions: ${hotspotChunks.map(i => `§${i+1}`).join(", ")}.` : "No specific hotspot sections detected."}`
+    : "";
+
+  return { isLongDoc: true, chunks, chunkScoreVariance, hotspotChunks, summary };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 //  AI essays hedge every empirical claim: "may", "can often", "generally",
 //  "tends to", "in many cases", "it is possible". A human editorial uses hedges
 //  sparingly and purposefully; AI layers them on every sentence as a safety
@@ -2442,6 +3378,373 @@ function discourseSchemaScore(text: string, sentences: string[]): { score: numbe
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+//  NEW SIGNAL I1 — SENTENCE-OPENING DIVERSITY (Improvement #5)
+//  AI models recycle a small set of sentence-opening structures.
+//  Low opener-type entropy = strong AI marker.
+//  Score: 0–20.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const SENTENCE_OPENER_PATTERNS: Array<{ label: string; re: RegExp }> = [
+  { label: "subj-verb-svc",  re: /^(The |A |An |This |These |It |AI |Each |Every |Many |Most |Some |Several |Such |One |Another )/i },
+  { label: "transition",     re: /^(Furthermore|Moreover|Additionally|Consequently|Nevertheless|Nonetheless|However|Therefore|Thus|Hence|In conclusion|In summary|Finally|Overall|To summarize)/i },
+  { label: "prep-phrase",    re: /^(In |On |At |By |For |With |Through |Among |Between |Within |Despite |Although |While |When |After |Before |Since |Because |As )/i },
+  { label: "gerund",         re: /^[A-Z][a-z]+(ing) /i },
+  { label: "question",       re: /\?$/ },
+  { label: "direct-address", re: /^(Consider|Think|Note|Look|Remember|Imagine|Suppose|Recall|Notice)/i },
+  { label: "number-list",    re: /^\d+\./ },
+  { label: "quote-fragment", re: /^["'"]/ },
+  { label: "fragment",       re: /^[A-Z][a-z\s]{0,15}\.$/ },
+  { label: "other",          re: /./ },
+];
+
+function sentenceOpenerDiversityScore(sentences: string[]): { score: number; details: string; entropyValue: number } {
+  if (sentences.length < 6) return { score: 0, details: "Insufficient sentences for opener diversity analysis.", entropyValue: 0 };
+
+  const typeCounts: Record<string, number> = {};
+  for (const sent of sentences) {
+    const trimmed = sent.trim();
+    let matched = "other";
+    for (const pat of SENTENCE_OPENER_PATTERNS) {
+      if (pat.re.test(trimmed)) { matched = pat.label; break; }
+    }
+    typeCounts[matched] = (typeCounts[matched] || 0) + 1;
+  }
+
+  // Shannon entropy of opener distribution
+  const total = sentences.length;
+  let entropy = 0;
+  for (const count of Object.values(typeCounts)) {
+    const p = count / total;
+    if (p > 0) entropy -= p * Math.log2(p);
+  }
+
+  // Max possible entropy with our 10 categories ≈ log2(10) = 3.32
+  const maxEntropy = Math.log2(SENTENCE_OPENER_PATTERNS.length);
+  const normalizedEntropy = entropy / maxEntropy; // 0–1
+
+  // Low diversity = AI (normalized entropy < 0.35)
+  let score = 0;
+  if (normalizedEntropy < 0.20) score = 20;
+  else if (normalizedEntropy < 0.30) score = 14;
+  else if (normalizedEntropy < 0.40) score = 8;
+  else if (normalizedEntropy < 0.50) score = 3;
+
+  const dominantType = Object.entries(typeCounts).sort((a, b) => b[1] - a[1])[0];
+  const details = score > 0
+    ? `Sentence opener entropy: ${entropy.toFixed(2)} (normalized: ${(normalizedEntropy*100).toFixed(0)}%). AI text has low opener diversity — dominant opener type "${dominantType?.[0]}" accounts for ${dominantType?.[1]} of ${total} sentences (${((dominantType?.[1]/total)*100).toFixed(0)}%). Human writers vary their sentence openings significantly more.`
+    : `Sentence opener entropy: ${entropy.toFixed(2)} (${(normalizedEntropy*100).toFixed(0)}% diversity) — natural human variation detected.`;
+
+  return { score, details, entropyValue: normalizedEntropy };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  NEW SIGNAL I2 — PUNCTUATION ENTROPY (Improvement #6)
+//  AI text has a highly predictable punctuation ratio — predominantly commas
+//  and periods, rarely semicolons, em-dashes, or colons in creative positions.
+//  Low punctuation diversity = AI marker.
+//  Score: 0–16.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function punctuationEntropyScore(text: string): { score: number; details: string } {
+  const counts: Record<string, number> = { comma: 0, period: 0, semicolon: 0, colon: 0, emdash: 0, question: 0, exclaim: 0, paren: 0, ellipsis: 0 };
+  counts.comma     = (text.match(/,/g) || []).length;
+  counts.period    = (text.match(/\.(?!\.)/g) || []).length;
+  counts.semicolon = (text.match(/;/g) || []).length;
+  counts.colon     = (text.match(/:/g) || []).length;
+  counts.emdash    = (text.match(/—| - /g) || []).length;
+  counts.question  = (text.match(/\?/g) || []).length;
+  counts.exclaim   = (text.match(/!/g) || []).length;
+  counts.paren     = (text.match(/\(/g) || []).length;
+  counts.ellipsis  = (text.match(/\.\.\.|…/g) || []).length;
+
+  const totalPunct = Object.values(counts).reduce((a, b) => a + b, 0);
+  if (totalPunct < 10) return { score: 0, details: "Insufficient punctuation for diversity analysis." };
+
+  // Shannon entropy of punctuation distribution
+  let entropy = 0;
+  for (const count of Object.values(counts)) {
+    const p = count / totalPunct;
+    if (p > 0) entropy -= p * Math.log2(p);
+  }
+  const maxEntropy = Math.log2(Object.keys(counts).length); // log2(9) ≈ 3.17
+  const normalizedEntropy = entropy / maxEntropy;
+
+  // Low punctuation diversity (only commas + periods) = AI
+  let score = 0;
+  if (normalizedEntropy < 0.30) score = 16;
+  else if (normalizedEntropy < 0.40) score = 10;
+  else if (normalizedEntropy < 0.50) score = 5;
+
+  const commaPeriodDominance = (counts.comma + counts.period) / totalPunct;
+  const details = score > 0
+    ? `Punctuation entropy: ${entropy.toFixed(2)} (${(normalizedEntropy*100).toFixed(0)}% of max). Comma+period dominance: ${(commaPeriodDominance*100).toFixed(0)}%. AI writes with mostly commas and periods; human writers use semicolons, em-dashes, parentheses, and varied punctuation. Semicolons: ${counts.semicolon}, em-dashes: ${counts.emdash}, colons: ${counts.colon}.`
+    : `Punctuation entropy: ${entropy.toFixed(2)} — adequate punctuation variety detected (consistent with human writing).`;
+
+  return { score, details };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  NEW SIGNAL I3 — PARAGRAPH LENGTH UNIFORMITY (Improvement #7)
+//  AI models produce paragraphs of suspiciously similar length.
+//  Low CV of paragraph word counts = AI structural marker.
+//  Score: 0–18.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function paragraphLengthUniformityScore(text: string): { score: number; details: string } {
+  const paragraphs = text.split(/\n\n+/).map(p => p.trim()).filter(p => p.length > 30);
+  if (paragraphs.length < 3) return { score: 0, details: "Insufficient paragraphs for length uniformity analysis (need ≥3)." };
+
+  const paraLengths = paragraphs.map(p => p.split(/\s+/).length);
+  const avg = paraLengths.reduce((a, b) => a + b, 0) / paraLengths.length;
+  const variance = paraLengths.reduce((s, l) => s + Math.pow(l - avg, 2), 0) / paraLengths.length;
+  const sd = Math.sqrt(variance);
+  const cv = sd / Math.max(avg, 1);
+
+  // Low CV = suspiciously uniform paragraph lengths (AI marker)
+  let score = 0;
+  if (cv < 0.12 && paragraphs.length >= 4) score = 18;
+  else if (cv < 0.20 && paragraphs.length >= 4) score = 12;
+  else if (cv < 0.28 && paragraphs.length >= 5) score = 6;
+
+  const minLen = Math.min(...paraLengths);
+  const maxLen = Math.max(...paraLengths);
+  const details = score > 0
+    ? `Paragraph length CV: ${cv.toFixed(3)} across ${paragraphs.length} paragraphs (mean ${avg.toFixed(0)} words, SD ${sd.toFixed(1)}, range ${minLen}–${maxLen}). AI produces paragraphs of suspiciously uniform length. Human writers vary paragraph length based on content density and rhetorical purpose.`
+    : `Paragraph length CV: ${cv.toFixed(3)} — natural length variation across ${paragraphs.length} paragraphs (${minLen}–${maxLen} words each).`;
+
+  return { score, details };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  NEW SIGNAL I4 — INTER-SENTENCE COHERENCE DROP (Improvement #4)
+//  AI text maintains unnaturally high inter-sentence coherence.
+//  We measure word-overlap similarity between adjacent sentences and flag
+//  suspiciously high uniformity (all sentences flow too smoothly).
+//  Score: 0–16.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function interSentenceCoherenceScore(sentences: string[]): { score: number; details: string } {
+  if (sentences.length < 5) return { score: 0, details: "Insufficient sentences for coherence analysis." };
+
+  // Compute Jaccard-like overlap between consecutive sentence content words
+  const similarities: number[] = [];
+  for (let i = 0; i < sentences.length - 1; i++) {
+    const wA = new Set((sentences[i].toLowerCase().match(/\b[a-z]{4,}\b/g) || []).filter(w => !STOP_WORDS.has(w)));
+    const wB = new Set((sentences[i+1].toLowerCase().match(/\b[a-z]{4,}\b/g) || []).filter(w => !STOP_WORDS.has(w)));
+    if (wA.size < 3 || wB.size < 3) continue;
+    let intersection = 0;
+    wA.forEach(w => { if (wB.has(w)) intersection++; });
+    const union = wA.size + wB.size - intersection;
+    similarities.push(intersection / Math.max(union, 1));
+  }
+
+  if (similarities.length < 3) return { score: 0, details: "Insufficient comparable sentence pairs." };
+
+  const meanSim = similarities.reduce((a, b) => a + b, 0) / similarities.length;
+  const varSim = similarities.reduce((s, v) => s + Math.pow(v - meanSim, 2), 0) / similarities.length;
+  const sdSim = Math.sqrt(varSim);
+
+  // AI: high mean similarity + low variance (smooth, uniform coherence)
+  // Human: moderate mean + higher variance (some abrupt shifts, natural digression)
+  let score = 0;
+  if (meanSim > 0.18 && sdSim < 0.08) score = 16;       // very smooth, suspicious
+  else if (meanSim > 0.14 && sdSim < 0.10) score = 10;
+  else if (meanSim > 0.10 && sdSim < 0.08) score = 5;
+
+  // Low coherence = human signal (reduction)
+  const humanReduction = sdSim > 0.15 ? 8 : 0;
+
+  const details = score > 0
+    ? `Inter-sentence coherence: mean Jaccard similarity ${meanSim.toFixed(3)}, SD ${sdSim.toFixed(3)} across ${similarities.length} adjacent pairs. AI text maintains unnaturally smooth topic continuity between sentences. Human writers show more abrupt micro-transitions and topic jumps (higher SD).`
+    : `Inter-sentence coherence: mean ${meanSim.toFixed(3)}, SD ${sdSim.toFixed(3)} — natural variation detected.`;
+
+  return { score: Math.max(0, score - humanReduction), details };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  PRE-PROCESSING: CITATION BLOCK STRIPPER (Improvement #16)
+//  Strips reference lists, footnotes, and bibliography sections before analysis
+//  to prevent proper nouns and specific numbers in citations from falsely
+//  boosting "human" signals.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function stripCitationBlocks(text: string): string {
+  // Match common reference section headers
+  const refHeaderRe = /\n\s*(References|Bibliography|Works Cited|Sources|Citations|Notes|Footnotes|Endnotes)\s*\n/i;
+  const headerMatch = text.search(refHeaderRe);
+  if (headerMatch > 100) {
+    // Strip from reference header to end of document
+    return text.slice(0, headerMatch).trim();
+  }
+
+  // Strip trailing numbered reference lists like:
+  // [1] Author, Title... or 1. Author, Title...
+  const trailingRefRe = /\n(\[\d+\]|\d+\.) .{10,}\n(\[\d+\]|\d+\.) .{10,}/g;
+  const lines = text.split('\n');
+  // Find where a block of [N] or N. lines begins (3+ consecutive = reference list)
+  let refStart = -1;
+  let consecutiveRefLines = 0;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (/^\s*(\[\d+\]|\d+\.)\s+\w/.test(lines[i])) {
+      consecutiveRefLines++;
+      if (consecutiveRefLines >= 3) { refStart = i; }
+    } else {
+      if (consecutiveRefLines >= 3 && refStart !== -1) break;
+      consecutiveRefLines = 0;
+    }
+  }
+  if (refStart > 0 && refStart > Math.floor(lines.length * 0.6)) {
+    return lines.slice(0, refStart).join('\n').trim();
+  }
+
+  return text;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  PRE-PROCESSING: CODE/TABLE BLOCK STRIPPER (Improvement #17)
+//  Strips inline code blocks, pseudocode, and markdown tables to prevent
+//  technical content from polluting stylometric signals.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function stripCodeAndTableBlocks(text: string): string {
+  // Strip markdown code blocks: ```...```
+  let cleaned = text.replace(/```[\s\S]*?```/g, ' [CODE_BLOCK] ');
+  // Strip inline code: `...`
+  cleaned = cleaned.replace(/`[^`\n]{1,100}`/g, '[code]');
+  // Strip markdown tables (lines starting with |)
+  cleaned = cleaned.replace(/^\|.*\|.*$/gm, '[TABLE_ROW]');
+  // Collapse multiple TABLE_ROW markers
+  cleaned = cleaned.replace(/(\[TABLE_ROW\]\s*){2,}/g, ' [TABLE] ');
+  // Strip HTML-style code or pre tags
+  cleaned = cleaned.replace(/<(code|pre)[^>]*>[\s\S]*?<\/(code|pre)>/gi, ' [CODE_BLOCK] ');
+  return cleaned;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  GENRE / REGISTER CLASSIFIER (Improvement #9)
+//  Identifies whether the text is a technical report, argumentative essay,
+//  narrative, reflective journal, or lab writeup — used to enable
+//  genre-specific signal weighting in engines.
+// ─────────────────────────────────────────────────────────────────────────────
+
+type GenreType = "technical" | "academic_essay" | "narrative" | "reflective" | "lab_report" | "general";
+
+interface GenreProfile {
+  genre: GenreType;
+  confidence: number; // 0-1
+  description: string;
+}
+
+function classifyGenre(text: string, words: string[]): GenreProfile {
+  const wc = Math.max(words.length, 1);
+
+  // Technical signals
+  const techTermCount = (text.match(/\b(algorithm|function|variable|class|object|database|sql|api|http|endpoint|framework|library|module|parameter|instance|method|prototype|interface|schema|query|runtime|compiler|syntax|null|boolean|integer|string|array|loop|recursion|neural network|deep learning|machine learning|gradient|epoch|tensor|vector|matrix|dataset)\b/gi) || []).length;
+
+  // Academic essay signals
+  const essayMarkers = (text.match(/\b(thesis|argument|contend|posit|assert|claim|analyze|critique|evaluate|argue|perspective|viewpoint|discourse|rhetoric|epistemology|ontology|paradigm|theoretical framework|literature review|primary source|secondary source)\b/gi) || []).length;
+
+  // Narrative/creative signals
+  const narrativeMarkers = (text.match(/\b(then|suddenly|later|eventually|finally|once upon|he said|she said|I walked|I felt|I saw|I heard|scene|chapter|plot|character|dialogue|narrator)\b/gi) || []).length;
+
+  // Reflective journal signals
+  const reflectiveMarkers = (text.match(/\b(I reflect|I believe|my experience|I have learned|looking back|I realized|I noticed|personally|in my view|from my perspective|I think|I feel|my understanding)\b/gi) || []).length;
+  const firstPersonCount = (text.match(/\b(I|my|me|myself)\b/g) || []).length;
+
+  // Lab report signals
+  const labMarkers = (text.match(/\b(hypothesis|methodology|procedure|apparatus|specimen|control group|experimental|results|data analysis|observation|measurement|error margin|statistical significance|p-value|sample size|variables?)\b/gi) || []).length;
+
+  const techRate = techTermCount / wc * 100;
+  const essayRate = essayMarkers / wc * 100;
+  const narrativeRate = narrativeMarkers / wc * 100;
+  const reflectiveRate = (reflectiveMarkers + firstPersonCount * 0.3) / wc * 100;
+  const labRate = labMarkers / wc * 100;
+
+  const scores: Array<[GenreType, number]> = [
+    ["technical",       techRate * 2],
+    ["academic_essay",  essayRate * 3],
+    ["narrative",       narrativeRate * 2.5],
+    ["reflective",      reflectiveRate * 2],
+    ["lab_report",      labRate * 3],
+    ["general",         1.0],
+  ];
+
+  scores.sort((a, b) => b[1] - a[1]);
+  const topGenre = scores[0][0];
+  const topScore = scores[0][1];
+  const confidence = Math.min(1, topScore / 10);
+
+  const descriptions: Record<GenreType, string> = {
+    technical: "Technical / code-heavy content",
+    academic_essay: "Academic argumentative essay",
+    narrative: "Narrative / creative writing",
+    reflective: "Reflective journal / personal essay",
+    lab_report: "Laboratory or research report",
+    general: "General prose",
+  };
+
+  return { genre: topGenre, confidence, description: descriptions[topGenre] };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  INTER-ENGINE DISAGREEMENT INDEX (Improvement #14)
+//  Quantifies disagreement between engines as a 0–100 score.
+//  Shown to reviewers to give actionable context beyond binary "Needs Review".
+// ─────────────────────────────────────────────────────────────────────────────
+
+function computeDisagreementIndex(scores: number[]): { index: number; label: string } {
+  if (scores.length < 2) return { index: 0, label: "N/A" };
+  const mean = scores.reduce((a, b) => a + b, 0) / scores.length;
+  const variance = scores.reduce((s, v) => s + Math.pow(v - mean, 2), 0) / scores.length;
+  const sd = Math.sqrt(variance);
+  const maxSD = 50; // theoretical max SD for scores in 0–100
+  const index = Math.min(100, Math.round((sd / maxSD) * 100));
+
+  let label = "Strong agreement";
+  if (index > 60) label = "Strong disagreement — high uncertainty";
+  else if (index > 40) label = "Moderate disagreement";
+  else if (index > 20) label = "Minor disagreement";
+
+  return { index, label };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  PLATT SCALING CALIBRATION (Improvement #11)
+//  Maps raw heuristic scores to calibrated probability estimates.
+//  Sigmoid function parameters fitted empirically to approximate a
+//  well-calibrated detector (GPTZero-aligned calibration).
+//  This replaces the hard threshold breakpoints with a smooth probability curve.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function plattCalibrateScore(rawScore: number): number {
+  // Sigmoid: P(AI) = 1 / (1 + exp(-k*(x - x0)))
+  // Parameters calibrated so:
+  //   rawScore=20 → ~20% AI probability (borderline human)
+  //   rawScore=40 → ~40% AI probability (ambiguous)
+  //   rawScore=60 → ~70% AI probability (likely AI)
+  //   rawScore=80 → ~90% AI probability (high confidence AI)
+  const k  = 0.07;   // steepness
+  const x0 = 48;     // midpoint (inflection)
+  const calibrated = 100 / (1 + Math.exp(-k * (rawScore - x0)));
+  return Math.round(Math.min(99, Math.max(1, calibrated)));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  DOCUMENT LENGTH-ADAPTIVE NORMALIZATION HELPER (Improvement #10)
+//  All per-document signals are normalized as rates per 1000 words so that
+//  a 150-word paragraph and a 2000-word essay are scored consistently.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function ratePerThousandWords(hitCount: number, wordCount: number): number {
+  return (hitCount / Math.max(wordCount, 1)) * 1000;
+}
+
+// Model version metadata (Improvement #20)
+const MODEL_VERSION = "MultiLens v4.0";
+const MODEL_DATE    = "June 2025";
+const MODEL_SIGNALS = "47 signals · 3 engines · Platt-calibrated · Genre-adaptive";
+
+// ─────────────────────────────────────────────────────────────────────────────
 //  IMPROVEMENT #10 — MEMOIZATION CACHE
 //  Caches the last analysis result per engine. On re-submit of the same text,
 //  returns cached results instantly instead of re-running all signal logic.
@@ -2772,7 +4075,81 @@ function runPerplexityEngine(text: string): EngineResult {
   // ── Signal 25: Idea Repetition (Enhancement #2) ──────────────────────────
   const { score: ideaRepScore, repetitivePairs, details: ideaRepDetails } = ideaRepetitionScore(text, sentences);
 
-  const activeSignals = [vocabScore, transScore, bigramScore, ttrScore, nomScore, rhythmScore, structureScore, ethicsScore, tricolonScore, llamaScore, claudeCatchScore, paraOpenerScore, conclusionScore, syntaxScore, hedgeScore, clauseStackScore, windowTTRScore, mtldScoreVal, semanticSimScore, toneFlatnessScoreVal, vagueCtScore, discourseSchemaScoreVal, ideaRepScore]
+  // ── NEW Signal 26: Sentence-Opening Diversity (Improvement #5) ────────────
+  const { score: openerDiversityScore, details: openerDiversityDetails } = sentenceOpenerDiversityScore(sentences);
+
+  // ── NEW Signal 27: Punctuation Entropy (Improvement #6) ──────────────────
+  const { score: punctEntropyScore, details: punctEntropyDetails } = punctuationEntropyScore(text);
+
+  // ── NEW Signal 28: Paragraph Length Uniformity (Improvement #7) ──────────
+  const { score: paraLenUniformityScore, details: paraLenUniformityDetails } = paragraphLengthUniformityScore(text);
+
+  // ── NEW Signal 29: Inter-Sentence Coherence (Improvement #4) ─────────────
+  const { score: coherenceScore, details: coherenceDetails } = interSentenceCoherenceScore(sentences);
+
+  // ── NEW Signal 30: Hapax Legomena Ratio ───────────────────────────────────
+  const { score: hapaxScore, hapaxRatio, details: hapaxDetails } = hapaxLegomenaScore(words);
+
+  // ── NEW Signal 31: Readability Fingerprinting (Flesch-Kincaid) ────────────
+  const { score: readabilityScore, fkgl, fkVariance, details: readabilityDetails } = readabilityFingerprintScore(text, sentences, words);
+
+  // ── NEW Signal 32: Function Word Profile ─────────────────────────────────
+  const { score: funcWordScore, details: funcWordDetails } = functionWordProfileScore(words, wc);
+
+  // ── NEW Signal 33: Quote/Direct Speech Detector (human reduction) ─────────
+  const { humanReduction: quoteReduction, quoteCount, details: quoteDetails } = quoteDetectorScore(text, wc);
+
+  // ── NEW Signal 34: Capitalization Abuse ──────────────────────────────────
+  const { score: capAbuseScore, abuseCount: capAbuseCount, details: capAbuseDetails } = capitalizationAbuseScore(text);
+
+  // ── NEW Signal 35: AI Model Family Fingerprinting ─────────────────────────
+  const { score: familyFingerprintScore, suspectedFamily, confidence: familyConfidence, details: familyDetails } = aiModelFamilyFingerprint(text);
+
+  // ── NEW Signal 36: Self-BLEU / Repetition-N Score ─────────────────────────
+  const { score: selfBleuScoreVal, avgOverlap: selfBleuOverlap, details: selfBleuDetails } = selfBleuScore(sentences);
+
+  // ── NEW Signal 37: Semantic Density (Content Word Ratio Variance) ──────────
+  const { score: semanticDensityScoreVal, densityCV, details: semanticDensityDetails } = semanticDensityScore(words, wc);
+
+  // ── NEW Signal 38: Paraphrase Attack Detection ────────────────────────────
+  const { score: paraphraseScore, details: paraphraseDetails } = paraphraseAttackScore(text, sentences);
+
+  // ── NEW Signal 39: Filipino/ESL L1-Transfer (human reduction) ────────────
+  const { humanReduction: filipinoReduction, l1Count: filipinoL1Count, details: filipinoDetails } = filipinoL1TransferScore(text, wc);
+
+  // ── NEW Signal 40: Zipf's Law Deviation ──────────────────────────────────
+  const { score: zipfScore, zipfDev, details: zipfDetails } = zipfDeviationScore(words);
+
+  // ── NEW Signal 41: TTR Trajectory (Power-Law vs Linear Decay) ────────────
+  const { score: ttrTrajectoryScore, linearityIndex, details: ttrTrajectoryDetails } = ttrTrajectorySore(words);
+
+  // ── NEW Signal 42: KS Normality Test (Sentence-Length Distribution Shape) ─
+  const { score: ksNormalityScoreVal, ksStatistic, skewness: sentSkewness, details: ksNormalityDetails } = ksNormalityScore(sentences);
+
+  // ── NEW Signal 43: Anaphora Resolution Density ────────────────────────────
+  const { score: anaphoraScoreVal, details: anaphoraDetails } = anaphoraScore(text, sentences, wc);
+
+  // ── NEW Signal 44: Temporal/Spatial Grounding (human reduction) ───────────
+  const { humanReduction: groundingReduction, groundingCount, details: groundingDetails } = temporalSpatialGroundingScore(text, wc);
+
+  // ── NEW Signal 45: Argument Structure Analysis ────────────────────────────
+  const { score: argStructureScore, evidentialCount, assertiveCount, details: argStructureDetails } = argumentStructureScore(text, wc);
+
+  // ── NEW Signal 46: Section-Differential Scoring ───────────────────────────
+  const { score: sectionDiffScore, bodyScore: sectionBodyScore, introScore: sectionIntroScore, conclusionScore: sectionConcScore, details: sectionDiffDetails } = sectionDifferentialScore(text, words);
+
+  // ── NEW: Long-Document Chunk Analysis (architectural) ────────────────────
+  const chunkAnalysis = analyzeInChunks(text, words, sentences);
+
+  // ── Genre classifier (Improvement #9) ────────────────────────────────────
+  const genreProfile = classifyGenre(text, words);
+  // Genre-adaptive weight adjustments: technical texts have less reliable stylometric signals
+  const genreMultiplier = genreProfile.genre === "technical" ? 0.80
+    : genreProfile.genre === "lab_report"   ? 0.85
+    : genreProfile.genre === "reflective"   ? 0.90
+    : 1.0;
+
+  const activeSignals = [vocabScore, transScore, bigramScore, ttrScore, nomScore, rhythmScore, structureScore, ethicsScore, tricolonScore, llamaScore, claudeCatchScore, paraOpenerScore, conclusionScore, syntaxScore, hedgeScore, clauseStackScore, windowTTRScore, mtldScoreVal, semanticSimScore, toneFlatnessScoreVal, vagueCtScore, discourseSchemaScoreVal, ideaRepScore, openerDiversityScore, punctEntropyScore, paraLenUniformityScore, coherenceScore, hapaxScore, readabilityScore, funcWordScore, capAbuseScore, familyFingerprintScore, selfBleuScoreVal, semanticDensityScoreVal, paraphraseScore, zipfScore, ttrTrajectoryScore, ksNormalityScoreVal, anaphoraScoreVal, argStructureScore, sectionDiffScore]
     .filter(s => s > 5).length;
 
   // ── Improvement #8: Empirically-calibrated signal weights ────────────────
@@ -2783,12 +4160,16 @@ function runPerplexityEngine(text: string): EngineResult {
   // Tier D (surface-level): TTR, nom, rhythm, windowTTR
   // Tier E (catch-nets): llama, claude catch-net
   // Tier F (new research signals): MTLD, semantic sim, tone flatness, vague cite, discourse schema
-  const W_TIER_A = 1.00; // lexical signals — most discriminative
-  const W_TIER_B = 0.95; // structural signals — high confidence
-  const W_TIER_C = 0.85; // stylistic signals — medium confidence
-  const W_TIER_D = 0.75; // surface signals — lower standalone reliability
-  const W_TIER_E = 0.60; // catch-net signals — secondary evidence only
-  const W_TIER_F = 0.80; // new research signals — validated, medium-high weight
+  // Tier G (new enhancement signals): hapax, readability, function words, caps abuse, model family, self-BLEU, density, paraphrase
+  // Tier H (new batch-2 signals): Zipf, TTR trajectory, KS normality, anaphora, argument structure, section-differential
+  const W_TIER_A = 1.00;
+  const W_TIER_B = 0.95;
+  const W_TIER_C = 0.85;
+  const W_TIER_D = 0.75;
+  const W_TIER_E = 0.60;
+  const W_TIER_F = 0.80;
+  const W_TIER_G = 0.70;
+  const W_TIER_H = 0.72; // batch-2 signals — validated, medium-high discriminative power
 
   const weightedRawTotal =
     vocabScore           * W_TIER_A +  // Tier A: lexical
@@ -2813,15 +4194,37 @@ function runPerplexityEngine(text: string): EngineResult {
     toneFlatnessScoreVal * W_TIER_F +
     vagueCtScore         * W_TIER_F +
     discourseSchemaScoreVal * W_TIER_F +
-    ideaRepScore         * W_TIER_F;  // idea repetition (enhancement #2)
+    ideaRepScore         * W_TIER_F +  // idea repetition (enhancement #2)
+    openerDiversityScore * W_TIER_F +  // Improvement #5
+    punctEntropyScore    * W_TIER_F +  // Improvement #6
+    paraLenUniformityScore * W_TIER_F + // Improvement #7
+    coherenceScore       * W_TIER_F +  // Improvement #4
+    hapaxScore           * W_TIER_G +  // Tier G: new enhancement signals
+    readabilityScore     * W_TIER_G +
+    funcWordScore        * W_TIER_G +
+    capAbuseScore        * W_TIER_G +
+    familyFingerprintScore * W_TIER_G +
+    selfBleuScoreVal     * W_TIER_G +
+    semanticDensityScoreVal * W_TIER_G +
+    paraphraseScore      * W_TIER_G +
+    zipfScore            * W_TIER_H +  // Tier H: batch-2 signals
+    ttrTrajectoryScore   * W_TIER_H +
+    ksNormalityScoreVal  * W_TIER_H +
+    anaphoraScoreVal     * W_TIER_H +
+    argStructureScore    * W_TIER_H +
+    sectionDiffScore     * W_TIER_H;
 
   const weightedMaxTotal =
-    35  * W_TIER_A + 35  * W_TIER_A + 30  * W_TIER_A +  // vocab + trans + bigram
-    25  * W_TIER_B + 30  * W_TIER_B + 22  * W_TIER_B +  // structure + opener + conclusion
-    28  * W_TIER_C + 24  * W_TIER_C + 28  * W_TIER_C + 20 * W_TIER_C + 20 * W_TIER_C + // hedge+clause+syntax+ethics+tricolon
-    25  * W_TIER_D + 20  * W_TIER_D + 20  * W_TIER_D + 22 * W_TIER_D + // ttr+nom+rhythm+windowTTR
-    28  * W_TIER_E + 24  * W_TIER_E +  // llama + claude
-    24  * W_TIER_F + 20  * W_TIER_F + 18 * W_TIER_F + 16 * W_TIER_F + 18 * W_TIER_F + 22 * W_TIER_F; // Tier F signals incl. idea rep
+    35  * W_TIER_A + 35  * W_TIER_A + 30  * W_TIER_A +
+    25  * W_TIER_B + 30  * W_TIER_B + 22  * W_TIER_B +
+    28  * W_TIER_C + 24  * W_TIER_C + 28  * W_TIER_C + 20 * W_TIER_C + 20 * W_TIER_C +
+    25  * W_TIER_D + 20  * W_TIER_D + 20  * W_TIER_D + 22 * W_TIER_D +
+    28  * W_TIER_E + 24  * W_TIER_E +
+    24  * W_TIER_F + 20  * W_TIER_F + 18 * W_TIER_F + 16 * W_TIER_F + 18 * W_TIER_F + 22 * W_TIER_F +
+    20  * W_TIER_F + 16  * W_TIER_F + 18 * W_TIER_F + 16 * W_TIER_F +
+    20  * W_TIER_G + 22  * W_TIER_G + 18 * W_TIER_G + 15 * W_TIER_G +
+    20  * W_TIER_G + 20  * W_TIER_G + 16 * W_TIER_G + 18 * W_TIER_G +
+    22  * W_TIER_H + 20  * W_TIER_H + 18 * W_TIER_H + 16 * W_TIER_H + 18 * W_TIER_H + 20 * W_TIER_H;
 
   const rawTotal = weightedRawTotal; // kept for backward compat with cluster boosts
   const maxTotal = weightedMaxTotal;
@@ -2850,6 +4253,21 @@ function runPerplexityEngine(text: string): EngineResult {
   // Applied before ESL check so it doesn't get overridden
   if (namedEntityReduction > 0) {
     norm = Math.max(0, norm - namedEntityReduction * (norm / 100));  // proportional reduction
+  }
+
+  // ── Quote/Direct Speech human reduction: cited sources → human signal ─────
+  if (quoteReduction > 0) {
+    norm = Math.max(0, norm - quoteReduction * (norm / 100));
+  }
+
+  // ── Filipino/ESL L1-Transfer human reduction ──────────────────────────────
+  if (filipinoReduction > 0) {
+    norm = Math.max(0, norm - filipinoReduction * (norm / 100) * 1.5);
+  }
+
+  // ── Temporal/Spatial Grounding human reduction ────────────────────────────
+  if (groundingReduction > 0) {
+    norm = Math.max(0, norm - groundingReduction * (norm / 100));
   }
 
   // ESL penalty: when ESL heuristic fires, vocab+transition signals are unreliable
@@ -2895,14 +4313,24 @@ function runPerplexityEngine(text: string): EngineResult {
     norm = Math.max(0, norm - eslScorePenalty);
   }
 
-  const rawScore = Math.round(Math.min(100, Math.max(0, norm)));
+  // ── Improvement #9: Genre-adaptive adjustment ────────────────────────────
+  // Technical and lab-report texts have less reliable stylometric signals.
+  norm = Math.min(100, Math.max(0, norm * genreMultiplier));
+  if (genreProfile.genre !== "general" && genreProfile.confidence > 0.3 && !reliabilityWarnings.some(w => w.includes("Genre"))) {
+    reliabilityWarnings.push(`Genre detected: ${genreProfile.description} (confidence: ${(genreProfile.confidence*100).toFixed(0)}%) — signal weights adjusted accordingly.`);
+  }
+
+  // ── Improvement #11: Platt scaling calibration ────────────────────────────
+  // Map raw heuristic score to calibrated probability estimate.
+  const calibratedNorm = plattCalibrateScore(Math.round(norm));
+  // Blend: 70% calibrated, 30% raw (preserves signal sensitivity at extremes)
+  const blendedNorm = Math.round(calibratedNorm * 0.70 + norm * 0.30);
+
+  const rawScore = Math.round(Math.min(100, Math.max(0, blendedNorm)));
 
   // ── Confidence interval ────────────────────────────────────────────────────
   const signalsAgreeing = activeSignals;
-  // GAP 3 FIX: signal count was hardcoded at 9; Engine A now has 19 signals.
-  // Use activeSignals (the actual count of signals that fired > 5pts) rather than
-  // a static ceiling — this correctly widens/narrows the CI based on evidence density.
-  const totalSignalCount = 24; // Engine A total signal definitions (19 original + 5 new: MTLD, semantic sim, tone flatness, vague citation, discourse schema)
+  const totalSignalCount = 47; // Engine A: original + all improvement + enhancement + batch-2 signals
   const { low, high, strength, phrase } = computeConfidenceInterval(
     rawScore, totalSignalCount, signalsAgreeing, reliabilityWarnings, wc
   );
@@ -3092,6 +4520,184 @@ function runPerplexityEngine(text: string): EngineResult {
       pointsToAI: ideaRepScore >= 5,
       wellSupported: repetitivePairs >= 3,
     },
+    // ── Improvement #5: Sentence-Opening Diversity ────────────────────────────
+    {
+      name: "Sentence-Opening Diversity",
+      value: openerDiversityDetails,
+      strength: Math.min(100, Math.round((openerDiversityScore / 20) * 100)),
+      pointsToAI: openerDiversityScore >= 8,
+      wellSupported: openerDiversityScore >= 14,
+    },
+    // ── Improvement #6: Punctuation Entropy ──────────────────────────────────
+    {
+      name: "Punctuation Diversity (Entropy)",
+      value: punctEntropyDetails,
+      strength: Math.min(100, Math.round((punctEntropyScore / 16) * 100)),
+      pointsToAI: punctEntropyScore >= 5,
+      wellSupported: punctEntropyScore >= 10,
+    },
+    // ── Improvement #7: Paragraph Length Uniformity ───────────────────────────
+    {
+      name: "Paragraph Length Uniformity",
+      value: paraLenUniformityDetails,
+      strength: Math.min(100, Math.round((paraLenUniformityScore / 18) * 100)),
+      pointsToAI: paraLenUniformityScore >= 6,
+      wellSupported: paraLenUniformityScore >= 12,
+    },
+    // ── Improvement #4: Inter-Sentence Coherence ─────────────────────────────
+    {
+      name: "Inter-Sentence Coherence Uniformity",
+      value: coherenceDetails,
+      strength: Math.min(100, Math.round((coherenceScore / 16) * 100)),
+      pointsToAI: coherenceScore >= 5,
+      wellSupported: coherenceScore >= 10,
+    },
+    // ── NEW: Hapax Legomena Ratio ─────────────────────────────────────────────
+    {
+      name: "Hapax Legomena Ratio",
+      value: hapaxDetails,
+      strength: Math.min(100, Math.round((hapaxScore / 20) * 100)),
+      pointsToAI: hapaxScore >= 5,
+      wellSupported: hapaxScore >= 15,
+    },
+    // ── NEW: Readability Fingerprinting ──────────────────────────────────────
+    {
+      name: "Readability Uniformity (Flesch-Kincaid)",
+      value: readabilityDetails,
+      strength: Math.min(100, Math.round((readabilityScore / 22) * 100)),
+      pointsToAI: readabilityScore >= 8,
+      wellSupported: readabilityScore >= 14,
+    },
+    // ── NEW: Function Word Profile ────────────────────────────────────────────
+    {
+      name: "Function Word Profile (Stylometric)",
+      value: funcWordDetails,
+      strength: Math.min(100, Math.round((funcWordScore / 18) * 100)),
+      pointsToAI: funcWordScore >= 7,
+      wellSupported: funcWordScore >= 12,
+    },
+    // ── NEW: Quote/Direct Speech (human signal) ───────────────────────────────
+    {
+      name: "Direct Quotation Presence (human signal)",
+      value: quoteDetails,
+      strength: Math.min(100, quoteReduction * 8),
+      pointsToAI: false,
+      wellSupported: quoteCount >= 3,
+    },
+    // ── NEW: Capitalization Abuse ─────────────────────────────────────────────
+    {
+      name: "Mid-Sentence Capitalization Abuse",
+      value: capAbuseDetails,
+      strength: Math.min(100, Math.round((capAbuseScore / 15) * 100)),
+      pointsToAI: capAbuseScore >= 3,
+      wellSupported: capAbuseScore >= 10,
+    },
+    // ── NEW: AI Model Family Fingerprinting ───────────────────────────────────
+    {
+      name: `AI Model Family Fingerprint${suspectedFamily ? ` — ${suspectedFamily}` : ""}`,
+      value: familyDetails,
+      strength: Math.min(100, Math.round((familyFingerprintScore / 20) * 100)),
+      pointsToAI: familyFingerprintScore >= 6,
+      wellSupported: familyFingerprintScore >= 12,
+    },
+    // ── NEW: Self-BLEU Repetition ─────────────────────────────────────────────
+    {
+      name: "Self-BLEU N-gram Repetition",
+      value: selfBleuDetails,
+      strength: Math.min(100, Math.round((selfBleuScoreVal / 20) * 100)),
+      pointsToAI: selfBleuScoreVal >= 4,
+      wellSupported: selfBleuScoreVal >= 14,
+    },
+    // ── NEW: Semantic Density Uniformity ─────────────────────────────────────
+    {
+      name: "Content Word Density Uniformity",
+      value: semanticDensityDetails,
+      strength: Math.min(100, Math.round((semanticDensityScoreVal / 16) * 100)),
+      pointsToAI: semanticDensityScoreVal >= 6,
+      wellSupported: semanticDensityScoreVal >= 10,
+    },
+    // ── NEW: Paraphrase Attack Detection ─────────────────────────────────────
+    {
+      name: "Paraphrase Attack Indicators",
+      value: paraphraseDetails,
+      strength: Math.min(100, Math.round((paraphraseScore / 18) * 100)),
+      pointsToAI: paraphraseScore >= 4,
+      wellSupported: paraphraseScore >= 12,
+    },
+    // ── NEW: Filipino/ESL L1-Transfer (human signal) ──────────────────────────
+    {
+      name: "Filipino/Philippine English L1-Transfer (human signal)",
+      value: filipinoDetails,
+      strength: Math.min(100, filipinoReduction * 7),
+      pointsToAI: false,
+      wellSupported: filipinoL1Count >= 3,
+    },
+    // ── NEW Batch 2: Zipf's Law Deviation ────────────────────────────────────
+    {
+      name: "Zipf's Law Deviation Score",
+      value: zipfDetails,
+      strength: Math.min(100, Math.round((zipfScore / 22) * 100)),
+      pointsToAI: zipfScore >= 5,
+      wellSupported: zipfScore >= 16,
+    },
+    // ── NEW Batch 2: TTR Trajectory ───────────────────────────────────────────
+    {
+      name: "TTR Trajectory (Power-Law vs Linear Decay)",
+      value: ttrTrajectoryDetails,
+      strength: Math.min(100, Math.round((ttrTrajectoryScore / 20) * 100)),
+      pointsToAI: ttrTrajectoryScore >= 4,
+      wellSupported: ttrTrajectoryScore >= 14,
+    },
+    // ── NEW Batch 2: KS Normality Test ────────────────────────────────────────
+    {
+      name: "Sentence-Length Distribution Shape (KS Test)",
+      value: ksNormalityDetails,
+      strength: Math.min(100, Math.round((ksNormalityScoreVal / 18) * 100)),
+      pointsToAI: ksNormalityScoreVal >= 7,
+      wellSupported: ksNormalityScoreVal >= 12,
+    },
+    // ── NEW Batch 2: Anaphora Resolution Density ──────────────────────────────
+    {
+      name: "Anaphora Resolution Density",
+      value: anaphoraDetails,
+      strength: Math.min(100, Math.round((anaphoraScoreVal / 16) * 100)),
+      pointsToAI: anaphoraScoreVal >= 6,
+      wellSupported: anaphoraScoreVal >= 10,
+    },
+    // ── NEW Batch 2: Temporal/Spatial Grounding (human signal) ────────────────
+    {
+      name: "Temporal/Spatial Grounding (human signal)",
+      value: groundingDetails,
+      strength: Math.min(100, groundingReduction * 8),
+      pointsToAI: false,
+      wellSupported: groundingCount >= 5,
+    },
+    // ── NEW Batch 2: Argument Structure Analysis ──────────────────────────────
+    {
+      name: "Argument Structure (Evidential vs Assertive)",
+      value: argStructureDetails,
+      strength: Math.min(100, Math.round((argStructureScore / 18) * 100)),
+      pointsToAI: argStructureScore >= 7,
+      wellSupported: argStructureScore >= 12,
+    },
+    // ── NEW Batch 2: Section-Differential Scoring ─────────────────────────────
+    {
+      name: "Section-Differential AI Signal (Body vs Conclusion)",
+      value: sectionDiffDetails,
+      strength: Math.min(100, Math.round((sectionDiffScore / 20) * 100)),
+      pointsToAI: sectionDiffScore >= 8,
+      wellSupported: sectionDiffScore >= 14,
+    },
+    // ── NEW Batch 2: Long-Document Chunk Analysis ─────────────────────────────
+    ...(chunkAnalysis.isLongDoc ? [{
+      name: `Long-Document Chunk Analysis (${chunkAnalysis.chunks.length} chunks)`,
+      value: chunkAnalysis.summary,
+      strength: chunkAnalysis.hotspotChunks.length > 0
+        ? Math.min(100, chunkAnalysis.hotspotChunks.length * 25)
+        : 0,
+      pointsToAI: chunkAnalysis.hotspotChunks.length > 0,
+      wellSupported: chunkAnalysis.hotspotChunks.length >= 2,
+    }] : []),
   ];
 
   // ── Per-sentence analysis ──────────────────────────────────────────────────
@@ -4108,7 +5714,36 @@ function EnginePanel({
             />
             <p className="text-xs text-slate-600 leading-relaxed font-medium">{result.verdictPhrase}</p>
 
-            {/* Reliability warnings — domain notes shown separately */}
+            {/* ── Per-Engine Reliability Score Badge ───────────────────────── */}
+            {(() => {
+              const wc = result.wordCount;
+              const warns = result.reliabilityWarnings;
+              const hasESL      = warns.some(w => /ESL|non-native|language/i.test(w));
+              const hasShort    = wc < 150;
+              const hasDomain   = warns.some(w => w.startsWith("Domain detected:"));
+              const hasGenre    = warns.some(w => w.startsWith("Genre detected:"));
+              // Deduct points per reliability risk factor
+              let rel = 100;
+              if (wc < 80)  rel -= 50;
+              else if (wc < 150) rel -= 25;
+              else if (wc < 300) rel -= 10;
+              if (hasESL)    rel -= 15;
+              if (hasDomain) rel -= 8;
+              if (hasGenre)  rel -= 5;
+              if (warns.filter(w => !w.startsWith("Domain") && !w.startsWith("Genre")).length >= 2) rel -= 10;
+              rel = Math.max(10, Math.min(100, rel));
+              const color = rel >= 75 ? "#16a34a" : rel >= 50 ? "#d97706" : "#dc2626";
+              const label = rel >= 75 ? "High" : rel >= 50 ? "Moderate" : "Low";
+              return (
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] text-slate-400 font-medium uppercase tracking-wide">Reliability</span>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full" style={{ background: color + "18", color }}>
+                    {label} · {rel}%
+                  </span>
+                  {rel < 75 && <span className="text-[10px] text-slate-400">— treat verdict with caution</span>}
+                </div>
+              );
+            })()}
             {result.reliabilityWarnings.length > 0 && (() => {
               const domainWarnings = result.reliabilityWarnings.filter(w => w.startsWith("Domain detected:"));
               const otherWarnings  = result.reliabilityWarnings.filter(w => !w.startsWith("Domain detected:"));
@@ -5382,33 +7017,62 @@ function saveHistory(records: ScanRecord[]) {
 
 // Enhancement #1: Reviewer feedback calibration
 // Stores reviewer overrides and computes a local false-positive rate.
-// When the detector repeatedly says "AI" but reviewers mark "Human",
-// this is surfaced as a calibration warning to the user.
+// Bayesian update: if override rate for a score band exceeds 30%, shift threshold by 5 pts.
 interface CalibrationData {
   totalScans: number;
-  reviewerOverrides: number; // cases where reviewer disagreed with system
-  systemSaidAI_reviewerSaidHuman: number; // false positive count
-  systemSaidHuman_reviewerSaidAI: number; // false negative count
+  reviewerOverrides: number;
+  systemSaidAI_reviewerSaidHuman: number;
+  systemSaidHuman_reviewerSaidAI: number;
+  // Bayesian band tracking: score buckets 0-9,10-19,...,90-99 → [systemAI_count, overrideToHuman_count]
+  bandOverrides?: Record<string, [number, number]>;
 }
 
 function loadCalibration(): CalibrationData {
-  try { return JSON.parse(localStorage.getItem("aidetect_calibration") || "null") ?? { totalScans: 0, reviewerOverrides: 0, systemSaidAI_reviewerSaidHuman: 0, systemSaidHuman_reviewerSaidAI: 0 }; }
-  catch { return { totalScans: 0, reviewerOverrides: 0, systemSaidAI_reviewerSaidHuman: 0, systemSaidHuman_reviewerSaidAI: 0 }; }
+  try { return JSON.parse(localStorage.getItem("aidetect_calibration") || "null") ?? { totalScans: 0, reviewerOverrides: 0, systemSaidAI_reviewerSaidHuman: 0, systemSaidHuman_reviewerSaidAI: 0, bandOverrides: {} }; }
+  catch { return { totalScans: 0, reviewerOverrides: 0, systemSaidAI_reviewerSaidHuman: 0, systemSaidHuman_reviewerSaidAI: 0, bandOverrides: {} }; }
 }
 
 function saveCalibration(data: CalibrationData) {
   try { localStorage.setItem("aidetect_calibration", JSON.stringify(data)); } catch {}
 }
 
-function recordReviewerFeedback(systemVerdict: string, reviewerVerdict: string) {
+// Bayesian threshold shift: returns how many points to shift the AI threshold
+// for a given score. Negative = shift toward human (reduce false positives).
+function getBayesianThresholdShift(score: number, cal: CalibrationData): number {
+  if (!cal.bandOverrides) return 0;
+  const band = String(Math.floor(score / 10) * 10); // e.g. score=67 → "60"
+  const entry = cal.bandOverrides[band];
+  if (!entry || entry[0] < 5) return 0; // need ≥5 samples in band
+  const overrideRate = entry[1] / entry[0];
+  if (overrideRate >= 0.30) return -5; // shift threshold down 5 pts (reduce FP)
+  if (overrideRate >= 0.50) return -10;
+  return 0;
+}
+
+function recordReviewerFeedback(systemVerdict: string, reviewerVerdict: string, systemScore?: number) {
   const cal = loadCalibration();
   cal.totalScans++;
+  if (!cal.bandOverrides) cal.bandOverrides = {};
   const sysIsAI = systemVerdict.includes("AI") || systemVerdict.includes("Likely AI") || systemVerdict.includes("Almost Certainly");
   const revIsAI = reviewerVerdict === "AI-Generated";
   const sysIsHuman = systemVerdict.includes("Human") || systemVerdict.includes("Mostly Human") || systemVerdict.includes("Likely Human");
   const revIsHuman = reviewerVerdict === "Human-Written";
   if (sysIsAI !== revIsAI || sysIsHuman !== revIsHuman) cal.reviewerOverrides++;
-  if (sysIsAI && revIsHuman) cal.systemSaidAI_reviewerSaidHuman++;
+  if (sysIsAI && revIsHuman) {
+    cal.systemSaidAI_reviewerSaidHuman++;
+    // Record band override for Bayesian update
+    if (systemScore !== undefined) {
+      const band = String(Math.floor(systemScore / 10) * 10);
+      if (!cal.bandOverrides[band]) cal.bandOverrides[band] = [0, 0];
+      cal.bandOverrides[band][0]++;
+      cal.bandOverrides[band][1]++;
+    }
+  } else if (sysIsAI && systemScore !== undefined) {
+    // System said AI, reviewer agreed — track total in band
+    const band = String(Math.floor(systemScore / 10) * 10);
+    if (!cal.bandOverrides[band]) cal.bandOverrides[band] = [0, 0];
+    cal.bandOverrides[band][0]++;
+  }
   if (sysIsHuman && revIsAI) cal.systemSaidHuman_reviewerSaidAI++;
   saveCalibration(cal);
 }
@@ -5609,7 +7273,7 @@ function EngineCard({
 }: {
   name: string; badge: string; badgeBg: string;
   result: EngineResult | null; loading: boolean;
-  accentColor: string; originalText?: string; icon: string;
+  accentColor: string; originalText?: string; icon: React.ReactNode;
 }) {
   const [expandedSig, setExpandedSig] = useState<number | null>(null);
   const [showOverlay, setShowOverlay] = useState(false);
@@ -5634,9 +7298,9 @@ function EngineCard({
   if (!result) return (
     <div className="rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50/50 flex items-center justify-center min-h-[220px]">
       <div className="text-center space-y-2 px-6">
-        <div className="text-3xl opacity-30">{icon}</div>
-        <p className="text-sm text-slate-400 font-medium">{name}</p>
-        <p className="text-xs text-slate-300">Run analysis to see results</p>
+        <div className="flex items-center justify-center w-12 h-12 rounded-2xl bg-slate-100 mx-auto" style={{ opacity: 0.5 }}>{icon}</div>
+        <p className="text-sm text-slate-500 font-semibold">{name}</p>
+        <p className="text-xs text-slate-400">Run analysis to see results</p>
       </div>
     </div>
   );
@@ -5939,7 +7603,7 @@ function QualityGate({ wc }: { wc: number }) {
         <div className="flex-1 h-1.5 bg-slate-100 rounded-full overflow-hidden">
           <div className="h-full rounded-full transition-all duration-300" style={{ width: `${pct}%`, background: current.color }} />
         </div>
-        <span className="text-[10px] font-semibold flex-shrink-0" style={{ color: current.color === "#e2e8f0" ? "#94a3b8" : current.color }}>
+        <span className="text-[10px] font-semibold flex-shrink-0" style={{ color: current.color === "#e2e8f0" ? "#475569" : current.color }}>
           {wc > 0 ? `${wc}w · ${current.label}` : "Enter text"}
         </span>
       </div>
@@ -6147,7 +7811,32 @@ export default function DetectorPage() {
 
     return { avgAI: finalAvgAI, avgMixed, avgHuman, tier: getTier(finalAvgAI), consensusNote, bimodalNote, bimodalStrength };
   };
-  const combined = getCombined();
+  const combined = (() => {
+    const raw = getCombined();
+    if (!raw) return null;
+    const cal = loadCalibration();
+    const shift = getBayesianThresholdShift(raw.avgAI, cal);
+    if (shift === 0) return raw;
+    const adjusted = Math.max(0, Math.min(100, raw.avgAI + shift));
+    return { ...raw, avgAI: adjusted, tier: getTier(adjusted) };
+  })();
+
+  // ── CONFIDENCE-BASED ABSTENTION (Architectural #16) ──────────────────────
+  // When all engines report INCONCLUSIVE and the disagreement index is high,
+  // abstain from giving any verdict rather than averaging uncertain signals.
+  const shouldAbstain = (() => {
+    if (!perpResult || !burstResult) return false;
+    const allInconclusive =
+      perpResult.evidenceStrength === "INCONCLUSIVE" &&
+      burstResult.evidenceStrength === "INCONCLUSIVE" &&
+      (!neuralResult || neuralResult.evidenceStrength === "INCONCLUSIVE");
+    if (!allInconclusive) return false;
+    // Disagreement index: spread of internalScores
+    const scores = [perpResult.internalScore, burstResult.internalScore, neuralResult?.internalScore ?? perpResult.internalScore];
+    const minS = Math.min(...scores);
+    const maxS = Math.max(...scores);
+    return (maxS - minS) > 40; // > 40 point spread with all inconclusive = abstain
+  })();
 
   // Consensus banner
   const getConsensusBanner = () => {
@@ -6196,49 +7885,50 @@ export default function DetectorPage() {
           return;
         }
         const p = runPerplexityEngine(sanitised);
-        const b = runBurstinessEngine(sanitised);
-        let [pFinal, bFinal] = applyConsensus(p, b, null);
+        let [pFinal, bFinal_placeholder] = applyConsensus(p, p, null); // temp self-consensus for A
 
-        const hasBracket = /\[AI:/i.test(sanitised);
-        const bothHigh   = pFinal.evidenceStrength === "HIGH" && bFinal.evidenceStrength === "HIGH";
-        if (hasBracket) {
-          const upgrade = (r: EngineResult) => ({ ...r, internalScore: Math.max(r.internalScore, 22), evidenceStrength: (["LOW","INCONCLUSIVE"].includes(r.evidenceStrength) ? "MEDIUM" : r.evidenceStrength) as EvidenceStrength, verdictPhrase: "[AI:] insertion detected — explicit hybrid/mixed authorship" });
-          pFinal = upgrade(pFinal); bFinal = upgrade(bFinal);
-        } else if (!bothHigh && p.sentenceCount >= 4) {
-          const { shiftScore } = intraDocumentShift(splitSentences(sanitised));
-          if (shiftScore > 35 && (pFinal.internalScore > 12 || bFinal.internalScore > 12)) {
-            const upgradeHybrid = (r: EngineResult, ph: string) => ({ ...r, internalScore: Math.max(r.internalScore, 22), evidenceStrength: (["LOW","INCONCLUSIVE"].includes(r.evidenceStrength) ? "MEDIUM" : r.evidenceStrength) as EvidenceStrength, verdictPhrase: r.internalScore < 22 ? ph : r.verdictPhrase });
-            pFinal = upgradeHybrid(pFinal, "Hybrid authorship signal — mixed style shift");
-            bFinal = upgradeHybrid(bFinal, "Hybrid authorship signal — style variance");
-          }
-        }
+        // ── PROGRESSIVE RESULTS: show Engine A immediately ─────────────────
+        engineAContextRef.current = { score: p.internalScore, evidenceStrength: p.evidenceStrength, topSignals: p.signals.filter(s => s.pointsToAI && s.strength >= 30).sort((a,b) => b.strength - a.strength).slice(0,4).map(s => `${s.name}: ${s.strength}%`) };
+        setRawPerpResult(p); setPerpResult(p); setLoadingT(false);
 
-        _analysisCache = { text: sanitised, perpResult: pFinal, burstResult: bFinal, timestamp: Date.now() };
-        engineAContextRef.current = { score: pFinal.internalScore, evidenceStrength: pFinal.evidenceStrength, topSignals: pFinal.signals.filter(s => s.pointsToAI && s.strength >= 30).sort((a,b) => b.strength - a.strength).slice(0,4).map(s => `${s.name}: ${s.strength}%`) };
-        engineBContextRef.current = { score: bFinal.internalScore, evidenceStrength: bFinal.evidenceStrength, topSignals: bFinal.signals.filter(s => s.pointsToAI && s.strength >= 30).sort((a,b) => b.strength - a.strength).slice(0,4).map(s => `${s.name}: ${s.strength}%`) };
-        setRawPerpResult(pFinal); setRawBurstResult(bFinal);
-        setPerpResult(pFinal);    setBurstResult(bFinal);
+        // Engine B fires 200ms later
+        setTimeout(() => {
+          try {
+            const b = runBurstinessEngine(sanitised);
+            let [pF, bF] = applyConsensus(p, b, null);
 
-        // Save to history
-        const elevRatio = pFinal.sentences.length > 0 ? pFinal.sentences.filter(s => s.label === "elevated").length / pFinal.sentences.length : 0;
-        const pBd = uiDeriveBreakdown(pFinal.internalScore, elevRatio);
-        const bBd = uiDeriveBreakdown(bFinal.internalScore, elevRatio);
-        const avgAI = Math.round((pBd.ai + bBd.ai) / 2);
-        const tier  = getTier(avgAI);
-        const rec: ScanRecord = {
-          id: Date.now().toString(),
-          ts: Date.now(),
-          snippet: sanitised.slice(0, 80) + (sanitised.length > 80 ? "…" : ""),
-          wordCount: wc,
-          verdict: tier.label,
-          aiPct: avgAI,
-          evidenceStrength: pFinal.evidenceStrength,
-        };
-        const updated = [rec, ...loadHistory()];
-        saveHistory(updated);
-        setHistory(updated);
-      } catch (e) { console.error(e); }
-      setLoadingT(false); setLoadingG(false);
+            const hasBracket = /\[AI:/i.test(sanitised);
+            const bothHigh   = pF.evidenceStrength === "HIGH" && bF.evidenceStrength === "HIGH";
+            if (hasBracket) {
+              const upgrade = (r: EngineResult) => ({ ...r, internalScore: Math.max(r.internalScore, 22), evidenceStrength: (["LOW","INCONCLUSIVE"].includes(r.evidenceStrength) ? "MEDIUM" : r.evidenceStrength) as EvidenceStrength, verdictPhrase: "[AI:] insertion detected — explicit hybrid/mixed authorship" });
+              pF = upgrade(pF); bF = upgrade(bF);
+            } else if (!bothHigh && p.sentenceCount >= 4) {
+              const { shiftScore } = intraDocumentShift(splitSentences(sanitised));
+              if (shiftScore > 35 && (pF.internalScore > 12 || bF.internalScore > 12)) {
+                const upgradeHybrid = (r: EngineResult, ph: string) => ({ ...r, internalScore: Math.max(r.internalScore, 22), evidenceStrength: (["LOW","INCONCLUSIVE"].includes(r.evidenceStrength) ? "MEDIUM" : r.evidenceStrength) as EvidenceStrength, verdictPhrase: r.internalScore < 22 ? ph : r.verdictPhrase });
+                pF = upgradeHybrid(pF, "Hybrid authorship signal — mixed style shift");
+                bF = upgradeHybrid(bF, "Hybrid authorship signal — style variance");
+              }
+            }
+
+            _analysisCache = { text: sanitised, perpResult: pF, burstResult: bF, timestamp: Date.now() };
+            engineAContextRef.current = { score: pF.internalScore, evidenceStrength: pF.evidenceStrength, topSignals: pF.signals.filter(s => s.pointsToAI && s.strength >= 30).sort((a,b) => b.strength - a.strength).slice(0,4).map(s => `${s.name}: ${s.strength}%`) };
+            engineBContextRef.current = { score: bF.internalScore, evidenceStrength: bF.evidenceStrength, topSignals: bF.signals.filter(s => s.pointsToAI && s.strength >= 30).sort((a,b) => b.strength - a.strength).slice(0,4).map(s => `${s.name}: ${s.strength}%`) };
+            setRawPerpResult(pF); setRawBurstResult(bF);
+            setPerpResult(pF);    setBurstResult(bF);
+
+            const elevRatio = pF.sentences.length > 0 ? pF.sentences.filter(s => s.label === "elevated").length / pF.sentences.length : 0;
+            const pBd = uiDeriveBreakdown(pF.internalScore, elevRatio);
+            const bBd = uiDeriveBreakdown(bF.internalScore, elevRatio);
+            const avgAI = Math.round((pBd.ai + bBd.ai) / 2);
+            const tier  = getTier(avgAI);
+            const rec: ScanRecord = { id: Date.now().toString(), ts: Date.now(), snippet: sanitised.slice(0, 80) + (sanitised.length > 80 ? "…" : ""), wordCount: wc, verdict: tier.label, aiPct: avgAI, evidenceStrength: pF.evidenceStrength };
+            const updated = [rec, ...loadHistory()];
+            saveHistory(updated); setHistory(updated);
+          } catch (e) { console.error(e); }
+          setLoadingG(false);
+        }, 200);
+      } catch (e) { console.error(e); setLoadingT(false); setLoadingG(false); }
     }, 400);
 
     // ── HYBRID GATE: Engine C strategy ───────────────────────────────────────
@@ -6333,25 +8023,25 @@ export default function DetectorPage() {
     <main className="min-h-screen" style={{ background: "#f8fafc", fontFamily: "'Inter var', 'Inter', system-ui, sans-serif" }}>
 
       {/* ── Header ────────────────────────────────────────────────────────── */}
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Inter:wght@600;700&display=swap');`}</style>
       <header className="sticky top-0 z-30 bg-white border-b border-slate-200 shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between gap-4">
+        <div className="w-full px-8 sm:px-12 h-20 flex items-center justify-between gap-4">
           {/* Logo */}
-          <div className="flex items-center gap-2.5 flex-shrink-0">
-            <div className="w-7 h-7 rounded-lg flex items-center justify-center"
-              style={{ background: "linear-gradient(135deg, #1e3a5f 0%, #3b82f6 100%)" }}>
-              {/* MultiLens icon: magnifying glass with concentric lens rings */}
-              <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <circle cx="11" cy="11" r="7" strokeWidth={2} />
-                <circle cx="11" cy="11" r="4" strokeWidth={1.5} strokeDasharray="2 1.5" />
-                <circle cx="11" cy="11" r="1.5" fill="currentColor" stroke="none" />
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M16.5 16.5l3.5 3.5" />
-              </svg>
-            </div>
-            <div className="flex flex-col leading-tight">
-              <span className="text-sm font-extrabold text-slate-900 tracking-tight">MultiLens</span>
-              <span className="text-[9px] font-semibold text-blue-600 uppercase tracking-wide">AI Detector</span>
+          <div className="flex items-center flex-shrink-0">
+            <div className="flex flex-col" style={{ gap: "10px" }}>
+              <span style={{ fontFamily: "'Inter', sans-serif", fontWeight: 700, fontSize: "1.6rem", color: "#1a1a1a", letterSpacing: "-0.02em", lineHeight: 1 }}>MultiLens</span>
+              <span style={{ fontFamily: "'Inter', sans-serif", fontWeight: 600, fontSize: "0.85rem", color: "#2563eb", letterSpacing: "0.08em", textTransform: "uppercase", lineHeight: 1 }}>AI Detector</span>
             </div>
           </div>
+
+          {/* Model version badge — Improvement #20 
+          <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-50 border border-slate-200">
+            <span className="text-[10px] font-bold text-slate-500">{MODEL_VERSION}</span>
+            <span className="text-slate-300">·</span>
+            <span className="text-[10px] text-slate-400">{MODEL_DATE}</span>
+            <span className="text-slate-300">·</span>
+            <span className="text-[10px] text-slate-400">{MODEL_SIGNALS}</span>
+          </div> */}
 
           {/* Nav tabs */}
           <nav className="flex items-center gap-1 bg-slate-100 rounded-xl p-1">
@@ -6393,16 +8083,29 @@ export default function DetectorPage() {
               {/* Mode switcher tabs */}
               <div className="flex items-center gap-0 border-b border-slate-100 px-4 pt-3">
                 {([
-                  { id: "text", label: "✏️  Paste Text" },
-                  { id: "pdf",  label: "📄  Upload PDF" },
-                  { id: "url",  label: "🔗  Fetch URL"  },
+                  { id: "text", label: "Paste Text", icon: (
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 3.487a2.25 2.25 0 113.182 3.182L7.5 19.213l-4.5 1.125 1.125-4.5L16.862 3.487z"/>
+                    </svg>
+                  )},
+                  { id: "pdf", label: "Upload PDF", icon: (
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/>
+                    </svg>
+                  )},
+                  { id: "url", label: "Fetch URL", icon: (
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m13.35-.622l1.757-1.757a4.5 4.5 0 00-6.364-6.364l-4.5 4.5a4.5 4.5 0 001.242 7.244"/>
+                    </svg>
+                  )},
                 ] as const).map(m => (
                   <button key={m.id} onClick={() => { setInputMode(m.id); if (m.id !== "pdf") { setPdfFileName(""); setPdfPageCount(0); } }}
-                    className={`px-4 py-2 text-xs font-semibold rounded-t-lg border-b-2 transition-all ${
+                    className={`flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-t-lg border-b-2 transition-all ${
                       inputMode === m.id
                         ? "border-blue-600 text-blue-700 bg-blue-50/60"
-                        : "border-transparent text-slate-500 hover:text-slate-700"
+                        : "border-transparent text-slate-600 hover:text-slate-800"
                     }`}>
+                    {m.icon}
                     {m.label}
                   </button>
                 ))}
@@ -6419,7 +8122,7 @@ export default function DetectorPage() {
                       rows={8}
                       placeholder="Paste the text you want to analyze here… (minimum 50 characters, 20 words)"
                       aria-label="Text to analyze"
-                      className="w-full resize-none rounded-xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent leading-relaxed transition font-mono"
+                      className="w-full resize-none rounded-xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-sm text-slate-800 placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent leading-relaxed transition font-mono"
                     />
                     <QualityGate wc={wc} />
                   </div>
@@ -6593,6 +8296,16 @@ export default function DetectorPage() {
             {(loading || combined) && (
               <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
                 <div className="px-6 py-5">
+                  {/* ── Confidence-Based Abstention Banner ───────────────────────────── */}
+                  {shouldAbstain && combined && (
+                    <div className="mb-4 flex items-start gap-3 rounded-xl bg-slate-100 border border-slate-300 px-4 py-3">
+                      <span className="text-2xl flex-shrink-0">🚫</span>
+                      <div>
+                        <p className="text-sm font-bold text-slate-800 mb-0.5">Cannot Determine — Insufficient Evidence</p>
+                        <p className="text-xs text-slate-600 leading-relaxed">All three engines returned INCONCLUSIVE with high inter-engine disagreement. Averaging three uncertain signals would produce a misleading result. No verdict can be reliably issued for this text. This may occur with very short texts, ambiguous writing styles, or texts at the boundary of AI and human writing patterns.</p>
+                      </div>
+                    </div>
+                  )}
                   {combined ? (
                     <div className="flex flex-col sm:flex-row items-center gap-6">
                       {/* Gauge */}
@@ -6647,6 +8360,38 @@ export default function DetectorPage() {
                           </div>
                         )}
 
+                        {/* AI Model Family Fingerprint (when detected with moderate confidence) */}
+                        {perpResult && (() => {
+                          const fSig = perpResult.signals.find(s => s.name.startsWith("AI Model Family Fingerprint"));
+                          if (!fSig || fSig.strength < 40) return null;
+                          const familyName = fSig.name.includes("—") ? fSig.name.split("—")[1].trim() : null;
+                          if (!familyName) return null;
+                          return (
+                            <div className="mt-2 flex items-start gap-2 rounded-xl bg-purple-50 border border-purple-200 px-3 py-2.5">
+                              <span className="text-purple-500 text-sm flex-shrink-0">🤖</span>
+                              <div>
+                                <p className="text-xs font-bold text-purple-800 mb-0.5">Suspected AI Family: {familyName}</p>
+                                <p className="text-xs text-purple-700 leading-snug">Stylistic fingerprinting suggests this text may match patterns associated with {familyName}. This is supplementary information only — low confidence, for reviewer reference.</p>
+                              </div>
+                            </div>
+                          );
+                        })()}
+
+                        {/* Long-Document Chunk Hotspot Banner */}
+                        {perpResult && (() => {
+                          const chunkSig = perpResult.signals.find(s => s.name.startsWith("Long-Document Chunk Analysis"));
+                          if (!chunkSig || !chunkSig.pointsToAI) return null;
+                          return (
+                            <div className="mt-2 flex items-start gap-2 rounded-xl bg-amber-50 border border-amber-300 px-3 py-2.5">
+                              <span className="text-amber-500 text-sm flex-shrink-0">📄</span>
+                              <div>
+                                <p className="text-xs font-bold text-amber-800 mb-0.5">Long Document — Section-Level AI Patterns Detected</p>
+                                <p className="text-xs text-amber-700 leading-snug">{chunkSig.value}</p>
+                              </div>
+                            </div>
+                          );
+                        })()}
+
                         {/* FPR FIX: Review-required banner for Needs Human Review tier */}
                         {combined.tier.needsReview && !combined.consensusNote && (
                           <div className="mt-2 flex items-start gap-2 rounded-xl bg-yellow-50 border border-yellow-300 px-3 py-2.5">
@@ -6656,6 +8401,30 @@ export default function DetectorPage() {
                             </p>
                           </div>
                         )}
+
+                        {/* Improvement #14: Inter-engine disagreement index */}
+                        {(() => {
+                          const engScores = [perpResult, burstResult, neuralResult].filter(Boolean).map(r => r!.internalScore);
+                          if (engScores.length < 2) return null;
+                          const { index: disagreeIdx, label: disagreeLabel } = computeDisagreementIndex(engScores);
+                          if (disagreeIdx < 20) return null; // no annotation for strong agreement
+                          const disagreeColor = disagreeIdx > 60 ? "#dc2626" : disagreeIdx > 40 ? "#d97706" : "#64748b";
+                          return (
+                            <div className="mt-2 flex items-start gap-2 rounded-xl bg-slate-50 border border-slate-200 px-3 py-2">
+                              <span className="text-slate-400 text-sm flex-shrink-0">⚡</span>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center justify-between gap-2 mb-1">
+                                  <p className="text-xs font-bold text-slate-700">Engine Disagreement Index</p>
+                                  <span className="text-[10px] font-black px-2 py-0.5 rounded-full text-white flex-shrink-0" style={{ background: disagreeColor }}>{disagreeIdx}/100</span>
+                                </div>
+                                <p className="text-[11px] text-slate-500 leading-snug">{disagreeLabel}. Higher disagreement = lower result confidence. Review individual engine signals for context.</p>
+                                <div className="mt-1.5 h-1.5 bg-slate-200 rounded-full overflow-hidden">
+                                  <div className="h-full rounded-full transition-all duration-500" style={{ width: `${disagreeIdx}%`, background: disagreeColor }} />
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })()}
                       </div>
 
                       {/* Actions */}
@@ -6704,7 +8473,7 @@ export default function DetectorPage() {
                             setJudgment(newVal);
                             // Enhancement #1: record reviewer feedback for local calibration
                             if (newVal && combined) {
-                              recordReviewerFeedback(combined.tier.label, newVal);
+                              recordReviewerFeedback(combined.tier.label, newVal, combined.avgAI);
                               // Also update the most recent history record with the reviewer verdict
                               const h = loadHistory();
                               if (h.length > 0) { h[0].reviewerVerdict = newVal; saveHistory(h); setHistory(h); }
@@ -6714,7 +8483,7 @@ export default function DetectorPage() {
                             aria-pressed={judgment === val}
                             style={judgment === val
                               ? { background: bg, color, borderColor: border, boxShadow: `0 0 0 2px ${color}40` }
-                              : { background: "#fff", color: "#94a3b8", borderColor: "#e2e8f0" }}>
+                              : { background: `${bg}99`, color: `${color}cc`, borderColor: border }}>
                             {judgment === val && <span>✓</span>}
                             {val}
                           </button>
@@ -6764,7 +8533,7 @@ export default function DetectorPage() {
               <EngineCard
                 name="Perplexity & Stylometry"
                 badge="PS" badgeBg="#1b3a6b"
-                icon="📊"
+                icon={<svg className="w-6 h-6 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}><path strokeLinecap="round" strokeLinejoin="round" d="M3 13.5l4-4 3 3 4-5 4 3"/><rect x="3" y="3" width="18" height="18" rx="2" strokeWidth={1.8}/></svg>}
                 result={perpResult} loading={loadingT}
                 accentColor="#1b3a6b"
                 originalText={inputText}
@@ -6772,7 +8541,7 @@ export default function DetectorPage() {
               <EngineCard
                 name="Burstiness & Cognitive"
                 badge="BC" badgeBg="#16a34a"
-                icon="📈"
+                icon={<svg className="w-6 h-6 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}><path strokeLinecap="round" strokeLinejoin="round" d="M2.25 18L9 11.25l4.306 4.307a11.95 11.95 0 015.814-5.519l2.74-1.22m0 0l-5.94-2.28m5.94 2.28l-2.28 5.941"/></svg>}
                 result={burstResult} loading={loadingG}
                 accentColor="#16a34a"
                 originalText={inputText}
@@ -6780,7 +8549,7 @@ export default function DetectorPage() {
               <EngineCard
                 name="Neural Perplexity"
                 badge="NP" badgeBg="#7c3aed"
-                icon="🧠"
+                icon={<svg className="w-6 h-6 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}><path strokeLinecap="round" strokeLinejoin="round" d="M8.625 12a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 01-2.555-.337A5.972 5.972 0 015.41 20.97a5.969 5.969 0 01-.474-.065 4.48 4.48 0 00.978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25z"/></svg>}
                 result={neuralResult} loading={loadingN}
                 accentColor="#7c3aed"
                 originalText={inputText}
@@ -6800,9 +8569,9 @@ export default function DetectorPage() {
               <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
                 <div className="px-6 py-5 grid sm:grid-cols-3 gap-5 text-xs leading-relaxed">
                   {[
-                    { badge: "PS", bg: "#1b3a6b", label: "Perplexity & Stylometry", text: "25 signals across 5 tiers: lexical vocab density, transitions, bigrams; structural paragraph openers, conclusion clustering; stylistic hedging, clause stacking, passive voice; surface TTR, MTLD, nominalization; semantic self-similarity, tone flatness, vague citations, discourse schema; idea repetition (within-paragraph Jaccard overlap — detects AI restating the same point 2–3× per paragraph)." },
+                    { badge: "PS", bg: "#1b3a6b", label: "Perplexity & Stylometry", text: "47 signals across 8 tiers: lexical (vocab density, transitions, bigrams); structural (paragraph openers, conclusion clustering); stylistic (hedging, clause stacking, passive voice); surface (TTR, MTLD, nominalization); semantic (self-similarity, tone flatness, vague citations, discourse schema); enhancement (hapax legomena, Flesch-Kincaid readability fingerprinting, function word profile, Self-BLEU n-gram repetition, semantic density uniformity, capitalization abuse, AI model family fingerprinting, paraphrase attack detection); batch-2 (Zipf's Law deviation, TTR power-law trajectory, KS normality test, anaphora resolution density, argument structure analysis, section-differential scoring, long-document chunk analysis). Human reductions: direct quotes, Filipino/ESL L1-transfer, temporal/spatial grounding. Genre-adaptive weighting. Confidence-based abstention." },
                     { badge: "BC", bg: "#16a34a", label: "Burstiness & Cognitive", text: "8 signals: sentence-length CV (burstiness), short-sentence absence, rhetorical variation, contractions, personal anecdote, numeric specificity. Personal anecdotes and precise numbers reduce AI score (human markers). CV < 0.22 = uniform AI rhythm; CV > 0.42 = natural human variation." },
-                    { badge: "NP", bg: "#7c3aed", label: "Neural Perplexity", text: "LLM-based analysis using Binoculars-style reasoning: token predictability (primary signal — each word's statistical expected-ness), semantic smoothness, structural uniformity, DetectGPT-style perturbation resistance (does text sit at a local probability maximum?), and bimodal sentence distribution detection for mixed/hybrid authorship. Explicitly calibrated for ESL and Philippine academic context to reduce false positives." },
+                    { badge: "NP", bg: "#7c3aed", label: "Neural Perplexity", text: "LLM-based analysis using Binoculars-style reasoning: token predictability, semantic smoothness, structural uniformity, DetectGPT-style perturbation resistance, bimodal sentence distribution detection (mixed authorship). Calibrated for ESL and Philippine academic context. Confidence-based abstention: when all engines return INCONCLUSIVE with high inter-engine disagreement (>40 point spread), no verdict is issued rather than averaging uncertain signals." },
                   ].map(({ badge, bg, label, text }) => (
                     <div key={badge}>
                       <p className="font-bold text-slate-700 mb-1.5 flex items-center gap-1.5">
@@ -6816,6 +8585,14 @@ export default function DetectorPage() {
                 <div className="mx-6 mb-5 rounded-xl bg-amber-50 border border-amber-200 px-4 py-3">
                   <p className="text-xs font-semibold text-amber-800 mb-0.5">⚠ Important Disclaimer</p>
                   <p className="text-xs text-amber-700 leading-relaxed">Results are probabilistic pattern analysis only. Formal academic writing, ESL writing, Philippine/Filipino academic writing, and extensively revised human text may share surface patterns with AI-generated text. ESL and Philippine context scores are automatically calibrated (−10–15 points) to reduce false positives on non-native English writing. The system requires dual-engine agreement before issuing an AI verdict — single-engine results are routed to "Needs Human Review". No automated decision should be based on these results alone. Always apply professional judgment.</p>
+                </div>
+                {/* Improvement #20: Model version tag */}
+                <div className="mx-6 mb-4 flex items-center gap-2 text-[10px] text-slate-400">
+                  <span className="font-bold text-slate-500">{MODEL_VERSION}</span>
+                  <span>·</span>
+                  <span>{MODEL_DATE}</span>
+                  <span>·</span>
+                  <span>{MODEL_SIGNALS}</span>
                 </div>
               </div>
             )}

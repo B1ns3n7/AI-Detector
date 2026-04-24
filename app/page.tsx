@@ -1904,28 +1904,41 @@ function capitalizationAbuseScore(text: string): { score: number; abuseCount: nu
 // ─────────────────────────────────────────────────────────────────────────────
 
 function aiModelFamilyFingerprint(text: string): { score: number; suspectedFamily: string | null; confidence: string; details: string } {
-  const ltext = text.toLowerCase();
+  // ── GPT-4 / GPT-4o fingerprints ─────────────────────────────────────────
+  // Em-dash overuse is a strong GPT-4o marker (ChatGPT loves —)
+  const gpt4Markers = (text.match(/—/g) || []).length;
+  // Expanded GPT-4o-specific vocabulary (these are well-documented ChatGPT tells)
+  const gpt4Vocab = (text.match(/\b(delve|tapestry|bustling|vibrant|foster|pivotal|leverage|synergy|paradigm|groundbreaking|innovative|transformative|comprehensive|multifaceted|it is important to note|it is worth noting that|in conclusion|in summary|to summarize|shed light|landscape|evolving landscape|crucial role|plays a crucial|deeply rooted|rich history)\b/gi) || []).length;
+  // GPT-4o structural patterns: numbered transitions and "Firstly/Secondly/Lastly"
+  const gpt4Structure = (text.match(/\b(firstly|secondly|thirdly|lastly|in addition to this|on the other hand|as a result of this)\b/gi) || []).length;
 
-  // GPT-4 / GPT-4o fingerprints
-  const gpt4Markers = (text.match(/—/g) || []).length; // em-dash overuse
-  const gpt4Vocab = (text.match(/\b(delve|tapestry|bustling|vibrant|foster|pivotal|leverage|synergy|paradigm|groundbreaking|innovative|transformative|comprehensive|multifaceted)\b/gi) || []).length;
+  // ── Claude fingerprints ──────────────────────────────────────────────────
+  // Claude has distinct meta-commentary and hedged-reflection phrases
+  const claudeMarkers = (text.match(/\b(nuanced|worth noting|worth considering|it's worth|at its core|at the heart|speaks to|stands as|serves as|taken together|considered together|this raises|this underscores|this illustrates|it's important to recognize|it's important to acknowledge|there's something|there is something|what makes|what this means|this points to|this reflects)\b/gi) || []).length;
 
-  // Claude fingerprints  
-  const claudeMarkers = (text.match(/\b(nuanced|worth noting|worth considering|it's worth|at its core|at the heart|speaks to|stands as|serves as|taken together|considered together|this raises|this underscores|this illustrates)\b/gi) || []).length;
-
-  // Llama 3 fingerprints: heavy hedged modality
+  // ── Llama 3 fingerprints: heavy hedged modality ──────────────────────────
   const llamaMarkers = (text.match(/\b(may|might|could)\b/gi) || []).length;
   const llamaRate = llamaMarkers / Math.max(text.split(/\s+/).length, 1);
 
-  // Gemini fingerprints: tricolon + "it's worth noting" clusters
-  const geminiMarkers = (text.match(/\b(it's worth noting|it is worth noting|notably|it should be noted)\b/gi) || []).length;
-  const geminiTricolon = (text.match(/\w[\w\s]{2,20},\s*\w[\w\s]{2,20},\s*and\s+\w[\w\s]{2,15}/gi) || []).length;
+  // ── Gemini fingerprints ──────────────────────────────────────────────────
+  // FIX: Only count phrases that are UNIQUELY Gemini — "notably" alone is too generic.
+  // Gemini-specific: "it's worth noting", "it is worth noting", "it should be noted"
+  // (NOT "notably" alone — that's too common across all AI and human writing)
+  const geminiPhrases = (text.match(/\b(it's worth noting|it is worth noting|it should be noted|as noted above|as mentioned above|it bears mentioning|it is essential to note)\b/gi) || []).length;
+  // FIX: Tricolon (X, Y, and Z) is universal — only count it when Gemini phrases
+  // are ALSO present, so it amplifies an existing signal rather than creating one.
+  // Without this guard, any well-structured text gets falsely flagged as Gemini.
+  const geminiTricolon = geminiPhrases > 0
+    ? (text.match(/\b\w[\w\s]{2,20},\s*\w[\w\s]{2,20},\s*and\s+\w[\w\s]{2,15}\b/gi) || []).length
+    : 0;
 
-  // Score each family
-  const gpt4Score    = gpt4Markers * 2 + gpt4Vocab * 3;
-  const claudeScore  = claudeMarkers * 4;
-  const llamaScore   = llamaRate > 0.05 ? Math.min(20, Math.round(llamaRate * 200)) : 0;
-  const geminiScore  = geminiMarkers * 4 + geminiTricolon * 2;
+  // ── Score each family ────────────────────────────────────────────────────
+  const gpt4Score   = gpt4Markers * 2 + gpt4Vocab * 3 + gpt4Structure * 2;
+  const claudeScore = claudeMarkers * 4;
+  const llamaScore  = llamaRate > 0.05 ? Math.min(20, Math.round(llamaRate * 200)) : 0;
+  // FIX: geminiTricolon is now conditional (0 if no Gemini phrases), so it can't
+  // inflate the score on its own. Gemini must have real phrase-level evidence first.
+  const geminiScore = geminiPhrases * 4 + geminiTricolon * 2;
 
   const scores = [
     { family: "GPT-4/GPT-4o", score: gpt4Score },
@@ -1934,20 +1947,32 @@ function aiModelFamilyFingerprint(text: string): { score: number; suspectedFamil
     { family: "Gemini",        score: geminiScore },
   ];
 
-  const best = scores.reduce((a, b) => a.score > b.score ? a : b);
+  // Sort descending to compare top two
+  const sorted = [...scores].sort((a, b) => b.score - a.score);
+  const best   = sorted[0];
+  const second = sorted[1];
   const totalAISignal = best.score;
+
+  // FIX: Require a meaningful gap between the winner and runner-up.
+  // If scores are close (gap < 5), the signal is ambiguous — don't name a family.
+  // This prevents a near-zero Gemini score from "winning" by default.
+  const gap = best.score - second.score;
+  const clearWinner = gap >= 5;
 
   let suspectedFamily: string | null = null;
   let confidence = "low";
   let signalScore = 0;
 
-  if (totalAISignal >= 16) { suspectedFamily = best.family; confidence = "moderate"; signalScore = 20; }
-  else if (totalAISignal >= 10) { suspectedFamily = best.family; confidence = "low"; signalScore = 12; }
-  else if (totalAISignal >= 5) { suspectedFamily = best.family; confidence = "very low"; signalScore = 6; }
+  if (clearWinner && totalAISignal >= 16) { suspectedFamily = best.family; confidence = "moderate"; signalScore = 20; }
+  else if (clearWinner && totalAISignal >= 10) { suspectedFamily = best.family; confidence = "low"; signalScore = 12; }
+  else if (clearWinner && totalAISignal >= 5)  { suspectedFamily = best.family; confidence = "very low"; signalScore = 6; }
+  // If no clear winner, leave suspectedFamily null — "Inconclusive" is better than wrong
 
   const details = suspectedFamily
-    ? `Suspected AI family: ${suspectedFamily} (${confidence} confidence). Scores — GPT-4: ${gpt4Score}, Claude: ${claudeScore}, Llama 3: ${llamaScore}, Gemini: ${geminiScore}. Family fingerprinting is supplementary and should not be used as standalone evidence.`
-    : `No strong AI family fingerprint detected (all family scores < 5). This does not indicate human authorship.`;
+    ? `Suspected AI family: ${suspectedFamily} (${confidence} confidence). Scores — GPT-4: ${gpt4Score}, Claude: ${claudeScore}, Llama 3: ${llamaScore}, Gemini: ${geminiScore}. Gap vs runner-up: ${gap}. Family fingerprinting is supplementary and should not be used as standalone evidence.`
+    : totalAISignal >= 5
+      ? `AI family inconclusive — scores too close to distinguish (top: ${best.family} ${best.score}, runner-up: ${second.family} ${second.score}, gap: ${gap}). This does not indicate human authorship.`
+      : `No strong AI family fingerprint detected (all family scores < 5). This does not indicate human authorship.`;
 
   return { score: signalScore, suspectedFamily, confidence, details };
 }
@@ -4597,8 +4622,10 @@ function runPerplexityEngine(text: string): EngineResult {
       name: `AI Model Family Fingerprint${suspectedFamily ? ` — ${suspectedFamily}` : ""}`,
       value: familyDetails,
       strength: Math.min(100, Math.round((familyFingerprintScore / 20) * 100)),
-      pointsToAI: familyFingerprintScore >= 6,
-      wellSupported: familyFingerprintScore >= 12,
+      // FIX: Only surface as an AI signal when confidence is "low" or above (score >= 12).
+      // "very low" confidence (score=6, strength=30) produced too many false Gemini labels.
+      pointsToAI: familyFingerprintScore >= 12,
+      wellSupported: familyFingerprintScore >= 16,
     },
     // ── NEW: Self-BLEU Repetition ─────────────────────────────────────────────
     {
@@ -8363,7 +8390,10 @@ export default function DetectorPage() {
                         {/* AI Model Family Fingerprint (when detected with moderate confidence) */}
                         {perpResult && (() => {
                           const fSig = perpResult.signals.find(s => s.name.startsWith("AI Model Family Fingerprint"));
-                          if (!fSig || fSig.strength < 40) return null;
+                          // FIX: Raise threshold from 40 → 60 (strength=60 = score≥12 = "low" confidence minimum).
+                          // strength=30 (very low, score=6) was far too weak and caused near-zero Gemini
+                          // tricolon matches to surface as "Suspected AI Family: Gemini".
+                          if (!fSig || fSig.strength < 60) return null;
                           const familyName = fSig.name.includes("—") ? fSig.name.split("—")[1].trim() : null;
                           if (!familyName) return null;
                           return (
