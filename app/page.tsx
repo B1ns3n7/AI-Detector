@@ -6,7 +6,7 @@ import { useState, useCallback, useRef, useEffect } from "react";
 //  PDF REPORT GENERATOR  (client-side via jsPDF, dynamically loaded)
 //  No npm install needed - loaded from cdnjs at download time.
 // ─────────────────────────────────────────────────────────────────────────────
-// ------------------------------------------------------------------------------------------------
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  PRE-PROCESSING SANITISERS
 //  Applied before ANY engine runs. Closes the two cheapest mechanical evasion
@@ -8025,7 +8025,7 @@ export default function DetectorPage() {
       {/* ── Header ────────────────────────────────────────────────────────── */}
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Inter:wght@600;700&display=swap');`}</style>
       <header className="sticky top-0 z-30 bg-white border-b border-slate-200 shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 h-18 flex items-center justify-between gap-4">
+        <div className="w-full px-8 sm:px-12 h-20 flex items-center justify-between gap-4">
           {/* Logo */}
           <div className="flex items-center flex-shrink-0">
             <div className="flex flex-col" style={{ gap: "10px" }}>
