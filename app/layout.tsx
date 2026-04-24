@@ -8,8 +8,8 @@ export const metadata: Metadata = {
   metadataBase: new URL(
     process.env.NEXT_PUBLIC_SITE_URL ?? 'http://localhost:3000'
   ),
-  title: 'AI Content Detector - Check & Humanize AI Text',
-  description: 'Detect AI-generated content and humanize it instantly. Transform AI text into natural, human-like writing.',
+  title: 'AI Content Detector',
+  description: 'Detect AI-generated content.',
   openGraph: {
     images: [
       {
