@@ -6,7 +6,7 @@ import { useState, useCallback, useRef, useEffect } from "react";
 //  PDF REPORT GENERATOR  (client-side via jsPDF, dynamically loaded)
 //  No npm install needed - loaded from cdnjs at download time.
 // ─────────────────────────────────────────────────────────────────────────────
-// ------------------------------------------------------------------------------------------------
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  PRE-PROCESSING SANITISERS
 //  Applied before ANY engine runs. Closes the two cheapest mechanical evasion
