@@ -8479,6 +8479,7 @@ export default function DetectorPage() {
                           const totalScore = rawScores.gpt4 + rawScores.claude + rawScores.llama + rawScores.gemini + rawScores.perplexity + rawScores.deepseek;
                           const confidence = fSig.strength >= 100 ? "Moderate confidence" : fSig.strength >= 60 ? "Low confidence" : "Very low confidence";
 
+                          type FamilyKey = "gpt4" | "claude" | "llama" | "gemini" | "perplexity" | "deepseek";
                           const families: Array<{
                             key: FamilyKey; label: string; subtitle: string; initials: string;
                             bg: string; barColor: string; borderColor: string; textColor: string;
