@@ -1903,58 +1903,42 @@ function capitalizationAbuseScore(text: string): { score: number; abuseCount: nu
 //  Score: 0–20 with suspected family label.
 // ─────────────────────────────────────────────────────────────────────────────
 
-function aiModelFamilyFingerprint(text: string): { score: number; suspectedFamily: string | null; confidence: string; details: string; rawScores: { gpt4: number; claude: number; llama: number; gemini: number } } {
-  const wordCount = Math.max(text.split(/\s+/).length, 1);
-
+function aiModelFamilyFingerprint(text: string): { score: number; suspectedFamily: string | null; confidence: string; details: string } {
   // ── GPT-4 / GPT-4o fingerprints ─────────────────────────────────────────
   // Em-dash overuse is a strong GPT-4o marker (ChatGPT loves —)
-  const gpt4Dashes = (text.match(/—/g) || []).length;
-  // Core GPT-4o vocabulary — these are well-documented ChatGPT tells.
-  // NOTE: "it is important to note", "crucial role" etc. are removed here because
-  // they appear in Gemini output too — moved to a shared AI vocab bucket below.
-  const gpt4Vocab = (text.match(/\b(delve|tapestry|bustling|vibrant|foster|pivotal|leverage|synergy|paradigm|groundbreaking|innovative|transformative|multifaceted|shed light|deeply rooted|rich history|evolving landscape|in summary|to summarize|as a whole|overall|it is important to note|plays a crucial)\b/gi) || []).length;
-  // GPT-4o structural patterns: Firstly/Secondly/Lastly ordering, "In addition to this"
-  const gpt4Structure = (text.match(/\b(firstly|secondly|thirdly|lastly|in addition to this|on the other hand|as a result of this|furthermore|moreover|consequently|in conclusion)\b/gi) || []).length;
-  // GPT-4o characteristic: numbered/bulleted breakdowns introduced with colons, "Here are the top"
-  const gpt4ListIntro = (text.match(/\b(here are|here is a|the following are|consider the following|below are|top \d|best \d|\d\.\s+[A-Z])/g) || []).length;
-  // GPT-4o "Pro-Tip" / "Why it works" / asterisk bullet pattern
-  const gpt4Meta = (text.match(/\bpro.tip\b|\bwhy it works\b|\bwhy it matters\b|\bkey takeaway\b|\btldr\b/gi) || []).length;
+  const gpt4Markers = (text.match(/—/g) || []).length;
+  // Expanded GPT-4o-specific vocabulary (these are well-documented ChatGPT tells)
+  const gpt4Vocab = (text.match(/\b(delve|tapestry|bustling|vibrant|foster|pivotal|leverage|synergy|paradigm|groundbreaking|innovative|transformative|comprehensive|multifaceted|it is important to note|it is worth noting that|in conclusion|in summary|to summarize|shed light|landscape|evolving landscape|crucial role|plays a crucial|deeply rooted|rich history)\b/gi) || []).length;
+  // GPT-4o structural patterns: numbered transitions and "Firstly/Secondly/Lastly"
+  const gpt4Structure = (text.match(/\b(firstly|secondly|thirdly|lastly|in addition to this|on the other hand|as a result of this)\b/gi) || []).length;
 
   // ── Claude fingerprints ──────────────────────────────────────────────────
   // Claude has distinct meta-commentary and hedged-reflection phrases
   const claudeMarkers = (text.match(/\b(nuanced|worth noting|worth considering|it's worth|at its core|at the heart|speaks to|stands as|serves as|taken together|considered together|this raises|this underscores|this illustrates|it's important to recognize|it's important to acknowledge|there's something|there is something|what makes|what this means|this points to|this reflects)\b/gi) || []).length;
 
   // ── Llama 3 fingerprints: heavy hedged modality ──────────────────────────
-  const llamaModalMarkers = (text.match(/\b(may|might|could)\b/gi) || []).length;
-  const llamaRate = llamaModalMarkers / wordCount;
-  // Llama 3 also produces very long run-on sentences and "In the context of" frames
-  const llamaFrameMarkers = (text.match(/\b(in the context of|within the context|it is worth mentioning|as such|as previously mentioned)\b/gi) || []).length;
+  const llamaMarkers = (text.match(/\b(may|might|could)\b/gi) || []).length;
+  const llamaRate = llamaMarkers / Math.max(text.split(/\s+/).length, 1);
 
   // ── Gemini fingerprints ──────────────────────────────────────────────────
-  // Gemini-specific hedging and annotation phrases
-  const geminiHedgePhrases = (text.match(/\b(it's worth noting|it is worth noting|it should be noted|as noted above|as mentioned above|it bears mentioning|it is essential to note|it is crucial to note|it is important to recognize|importantly|notably|keep in mind)\b/gi) || []).length;
-  // Gemini uses "based on" + qualifying phrase heavily in recommendations
-  const geminiBasedOn = (text.match(/\b(based on|depending on whether|whether you prioritize|your primary constraint|your best bet|your best choice|the best choice depends)\b/gi) || []).length;
-  // Gemini summary/recommendation closings
-  const geminiClosings = (text.match(/\b(my recommendation|the bottom line|in short|in brief|the key takeaway|the main takeaway|to put it simply|simply put|the best option is|all things considered)\b/gi) || []).length;
-  // Gemini "contender / champion / specialist" framing in comparisons
-  const geminiFraming = (text.match(/\b(contender|champion|specialist|all-rounder|practical|go-to|go with|the practical|anomaly specialist|deep learning choice|best bet|solid choice|strong choice)\b/gi) || []).length;
-  // Gemini uses "the" + adjective + "choice/option" framing heavily
-  const geminiChoiceFrame = (text.match(/\bthe\s+\w+\s+(choice|option|approach|candidate|method)\b/gi) || []).length;
-  // Gemini-style markdown-heavy asterisk bullets and bold text signifiers (even in plain text output)
-  const geminiMarkdown = (text.match(/\*\*|\* \w|\* Why|\* Pros|\* Cons/g) || []).length;
-  // Gemini tricolon — amplifier only if Gemini phrases are present
-  const geminiTricolon = geminiHedgePhrases > 0 || geminiBasedOn > 0
+  // FIX: Only count phrases that are UNIQUELY Gemini — "notably" alone is too generic.
+  // Gemini-specific: "it's worth noting", "it is worth noting", "it should be noted"
+  // (NOT "notably" alone — that's too common across all AI and human writing)
+  const geminiPhrases = (text.match(/\b(it's worth noting|it is worth noting|it should be noted|as noted above|as mentioned above|it bears mentioning|it is essential to note)\b/gi) || []).length;
+  // FIX: Tricolon (X, Y, and Z) is universal — only count it when Gemini phrases
+  // are ALSO present, so it amplifies an existing signal rather than creating one.
+  // Without this guard, any well-structured text gets falsely flagged as Gemini.
+  const geminiTricolon = geminiPhrases > 0
     ? (text.match(/\b\w[\w\s]{2,20},\s*\w[\w\s]{2,20},\s*and\s+\w[\w\s]{2,15}\b/gi) || []).length
     : 0;
 
   // ── Score each family ────────────────────────────────────────────────────
-  const gpt4Score   = gpt4Dashes * 2 + gpt4Vocab * 3 + gpt4Structure * 2 + gpt4ListIntro * 3 + gpt4Meta * 4;
+  const gpt4Score   = gpt4Markers * 2 + gpt4Vocab * 3 + gpt4Structure * 2;
   const claudeScore = claudeMarkers * 4;
-  const llamaScore  = (llamaRate > 0.05 ? Math.min(16, Math.round(llamaRate * 180)) : 0) + llamaFrameMarkers * 2;
-  const geminiScore = geminiHedgePhrases * 3 + geminiBasedOn * 4 + geminiClosings * 3 + geminiFraming * 3 + geminiChoiceFrame * 2 + geminiMarkdown * 2 + geminiTricolon * 2;
-
-  const rawScores = { gpt4: gpt4Score, claude: claudeScore, llama: llamaScore, gemini: geminiScore };
+  const llamaScore  = llamaRate > 0.05 ? Math.min(20, Math.round(llamaRate * 200)) : 0;
+  // FIX: geminiTricolon is now conditional (0 if no Gemini phrases), so it can't
+  // inflate the score on its own. Gemini must have real phrase-level evidence first.
+  const geminiScore = geminiPhrases * 4 + geminiTricolon * 2;
 
   const scores = [
     { family: "GPT-4/GPT-4o", score: gpt4Score },
@@ -1969,7 +1953,9 @@ function aiModelFamilyFingerprint(text: string): { score: number; suspectedFamil
   const second = sorted[1];
   const totalAISignal = best.score;
 
-  // Require a meaningful gap between the winner and runner-up.
+  // FIX: Require a meaningful gap between the winner and runner-up.
+  // If scores are close (gap < 5), the signal is ambiguous — don't name a family.
+  // This prevents a near-zero Gemini score from "winning" by default.
   const gap = best.score - second.score;
   const clearWinner = gap >= 5;
 
@@ -1983,12 +1969,12 @@ function aiModelFamilyFingerprint(text: string): { score: number; suspectedFamil
   // If no clear winner, leave suspectedFamily null — "Inconclusive" is better than wrong
 
   const details = suspectedFamily
-    ? `Suspected AI family: ${suspectedFamily} (${confidence} confidence). Scores — GPT-4/GPT-4o: ${gpt4Score}, Claude: ${claudeScore}, Llama 3: ${llamaScore}, Gemini: ${geminiScore}. Gap vs runner-up: ${gap}. Family fingerprinting is supplementary and should not be used as standalone evidence.`
+    ? `Suspected AI family: ${suspectedFamily} (${confidence} confidence). Scores — GPT-4: ${gpt4Score}, Claude: ${claudeScore}, Llama 3: ${llamaScore}, Gemini: ${geminiScore}. Gap vs runner-up: ${gap}. Family fingerprinting is supplementary and should not be used as standalone evidence.`
     : totalAISignal >= 5
       ? `AI family inconclusive — scores too close to distinguish (top: ${best.family} ${best.score}, runner-up: ${second.family} ${second.score}, gap: ${gap}). This does not indicate human authorship.`
       : `No strong AI family fingerprint detected (all family scores < 5). This does not indicate human authorship.`;
 
-  return { score: signalScore, suspectedFamily, confidence, details, rawScores };
+  return { score: signalScore, suspectedFamily, confidence, details };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -4142,7 +4128,7 @@ function runPerplexityEngine(text: string): EngineResult {
   const { score: capAbuseScore, abuseCount: capAbuseCount, details: capAbuseDetails } = capitalizationAbuseScore(text);
 
   // ── NEW Signal 35: AI Model Family Fingerprinting ─────────────────────────
-  const { score: familyFingerprintScore, suspectedFamily, confidence: familyConfidence, details: familyDetails, rawScores: familyRawScores } = aiModelFamilyFingerprint(text);
+  const { score: familyFingerprintScore, suspectedFamily, confidence: familyConfidence, details: familyDetails } = aiModelFamilyFingerprint(text);
 
   // ── NEW Signal 36: Self-BLEU / Repetition-N Score ─────────────────────────
   const { score: selfBleuScoreVal, avgOverlap: selfBleuOverlap, details: selfBleuDetails } = selfBleuScore(sentences);
@@ -4634,8 +4620,7 @@ function runPerplexityEngine(text: string): EngineResult {
     // ── NEW: AI Model Family Fingerprinting ───────────────────────────────────
     {
       name: `AI Model Family Fingerprint${suspectedFamily ? ` — ${suspectedFamily}` : ""}`,
-      // Embed rawScores as a parseable suffix so the UI can render the bar chart.
-      value: familyDetails + `\n__rawScores__:${JSON.stringify({ gpt4: familyRawScores.gpt4, claude: familyRawScores.claude, llama: familyRawScores.llama, gemini: familyRawScores.gemini })}`,
+      value: familyDetails,
       strength: Math.min(100, Math.round((familyFingerprintScore / 20) * 100)),
       // FIX: Only surface as an AI signal when confidence is "low" or above (score >= 12).
       // "very low" confidence (score=6, strength=30) produced too many false Gemini labels.
@@ -8402,72 +8387,22 @@ export default function DetectorPage() {
                           </div>
                         )}
 
-                        {/* AI Model Family Fingerprint (when detected with any confidence) */}
+                        {/* AI Model Family Fingerprint (when detected with moderate confidence) */}
                         {perpResult && (() => {
                           const fSig = perpResult.signals.find(s => s.name.startsWith("AI Model Family Fingerprint"));
-                          // Show card if there's any meaningful family signal (strength >= 30 = very low confidence)
-                          if (!fSig || fSig.strength < 30) return null;
+                          // FIX: Raise threshold from 40 → 60 (strength=60 = score≥12 = "low" confidence minimum).
+                          // strength=30 (very low, score=6) was far too weak and caused near-zero Gemini
+                          // tricolon matches to surface as "Suspected AI Family: Gemini".
+                          if (!fSig || fSig.strength < 60) return null;
                           const familyName = fSig.name.includes("—") ? fSig.name.split("—")[1].trim() : null;
-
-                          // Parse rawScores from the value suffix
-                          let rawScores: { gpt4: number; claude: number; llama: number; gemini: number } | null = null;
-                          const rawMatch = fSig.value.match(/__rawScores__:(\{[^}]+\})/);
-                          if (rawMatch) {
-                            try { rawScores = JSON.parse(rawMatch[1]); } catch {}
-                          }
-
-                          const maxScore = rawScores ? Math.max(rawScores.gpt4, rawScores.claude, rawScores.llama, rawScores.gemini, 1) : 1;
-                          const confidence = fSig.strength >= 100 ? "moderate" : fSig.strength >= 60 ? "low" : "very low";
-                          const confidenceColor = fSig.strength >= 100 ? "text-purple-800 bg-purple-100" : fSig.strength >= 60 ? "text-indigo-700 bg-indigo-50" : "text-slate-600 bg-slate-100";
-
-                          type FamilyKey = "gpt4" | "claude" | "llama" | "gemini";
-                          const families: Array<{ key: FamilyKey; label: string; color: string; barColor: string }> = [
-                            { key: "gpt4",   label: "GPT-4/4o", color: "text-green-700",  barColor: "#16a34a" },
-                            { key: "claude", label: "Claude",   color: "text-orange-600", barColor: "#ea580c" },
-                            { key: "gemini", label: "Gemini",   color: "text-blue-600",   barColor: "#2563eb" },
-                            { key: "llama",  label: "Llama 3",  color: "text-rose-600",   barColor: "#e11d48" },
-                          ];
-
+                          if (!familyName) return null;
                           return (
-                            <div className="mt-2 rounded-xl bg-purple-50 border border-purple-200 px-3 py-2.5">
-                              <div className="flex items-center gap-2 mb-1.5">
-                                <span className="text-purple-500 text-sm flex-shrink-0">🤖</span>
-                                <p className="text-xs font-bold text-purple-800 leading-tight">
-                                  {familyName ? `Suspected AI Family: ${familyName}` : "AI Family Signal Detected"}
-                                </p>
-                                <span className={`ml-auto text-[9px] font-bold px-1.5 py-0.5 rounded-full ${confidenceColor}`}>
-                                  {confidence} confidence
-                                </span>
+                            <div className="mt-2 flex items-start gap-2 rounded-xl bg-purple-50 border border-purple-200 px-3 py-2.5">
+                              <span className="text-purple-500 text-sm flex-shrink-0">🤖</span>
+                              <div>
+                                <p className="text-xs font-bold text-purple-800 mb-0.5">Suspected AI Family: {familyName}</p>
+                                <p className="text-xs text-purple-700 leading-snug">Stylistic fingerprinting suggests this text may match patterns associated with {familyName}. This is supplementary information only — low confidence, for reviewer reference.</p>
                               </div>
-
-                              {/* Mini bar chart for all 4 families */}
-                              {rawScores && (
-                                <div className="mb-1.5 space-y-1">
-                                  {families.map(({ key, label, barColor }) => {
-                                    const score = (rawScores as any)[key] as number;
-                                    const pct = Math.round((score / maxScore) * 100);
-                                    const isTop = familyName && label.toLowerCase().startsWith(familyName.toLowerCase().split("/")[0].toLowerCase());
-                                    return (
-                                      <div key={key} className="flex items-center gap-1.5">
-                                        <span className={`text-[10px] w-16 flex-shrink-0 font-${isTop ? "bold" : "normal"} text-slate-600`}>{label}</span>
-                                        <div className="flex-1 bg-slate-100 rounded-full h-1.5 overflow-hidden">
-                                          <div
-                                            className="h-full rounded-full transition-all"
-                                            style={{ width: `${Math.max(pct, score > 0 ? 3 : 0)}%`, background: barColor, opacity: isTop ? 1 : 0.45 }}
-                                          />
-                                        </div>
-                                        <span className="text-[9px] text-slate-400 w-4 text-right">{score}</span>
-                                      </div>
-                                    );
-                                  })}
-                                </div>
-                              )}
-
-                              <p className="text-[10px] text-purple-600 leading-snug">
-                                {familyName
-                                  ? `Stylistic markers suggest patterns associated with ${familyName}. Supplementary signal only — do not use as standalone evidence.`
-                                  : `Multiple AI family signals detected but no single family clearly dominates. Supplementary signal only.`}
-                              </p>
                             </div>
                           );
                         })()}
