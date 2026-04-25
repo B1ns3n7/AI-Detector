@@ -1933,18 +1933,18 @@ function aiModelFamilyFingerprint(text: string): { score: number; suspectedFamil
   // ── Gemini fingerprints ──────────────────────────────────────────────────
   // Gemini-specific hedging and annotation phrases
   const geminiHedgePhrases = (text.match(/\b(it's worth noting|it is worth noting|it should be noted|as noted above|as mentioned above|it bears mentioning|it is essential to note|it is crucial to note|it is important to recognize|importantly|notably|keep in mind)\b/gi) || []).length;
-  // Gemini recommendation/decision context — requires "based on [qualifier]" not generic "based on"
-  const geminiBasedOn = (text.match(/\b(based on (current|recent|our|my|the above|available) (research|analysis|evidence|findings|data|results)|depending on whether|whether you prioritize|your primary constraint|your best bet|your best choice|the best choice depends on)\b/gi) || []).length;
+  // Gemini uses "based on" + qualifying phrase heavily in recommendations
+  const geminiBasedOn = (text.match(/\b(based on|depending on whether|whether you prioritize|your primary constraint|your best bet|your best choice|the best choice depends)\b/gi) || []).length;
   // Gemini summary/recommendation closings
   const geminiClosings = (text.match(/\b(my recommendation|the bottom line|in short|in brief|the key takeaway|the main takeaway|to put it simply|simply put|the best option is|all things considered)\b/gi) || []).length;
-  // Gemini-exclusive competitive framing — must be clearly recommendation-style labels, not generic academic words
-  const geminiFraming = (text.match(/\b(all-rounder|practical champion|anomaly specialist|deep learning choice|the practical choice|the safe choice|your best bet|go-to choice|go-to option|go-to tool|solid choice|strong choice|clear winner|top contender|the right pick|best pick)\b/gi) || []).length;
-  // Gemini "the [adj] choice/option/approach" in recommendation context — only when adjacent to comparisons
-  const geminiChoiceFrame = (text.match(/\bthe\s+(best|top|safest|easiest|simplest|fastest|most (practical|efficient|reliable))\s+(choice|option|approach|candidate|method)\b/gi) || []).length;
+  // Gemini "contender / champion / specialist" framing in comparisons
+  const geminiFraming = (text.match(/\b(contender|champion|specialist|all-rounder|practical|go-to|go with|the practical|anomaly specialist|deep learning choice|best bet|solid choice|strong choice)\b/gi) || []).length;
+  // Gemini uses "the" + adjective + "choice/option" framing heavily
+  const geminiChoiceFrame = (text.match(/\bthe\s+\w+\s+(choice|option|approach|candidate|method)\b/gi) || []).length;
   // Gemini-style markdown-heavy asterisk bullets and bold text signifiers (even in plain text output)
   const geminiMarkdown = (text.match(/\*\*|\* \w|\* Why|\* Pros|\* Cons/g) || []).length;
-  // Gemini tricolon — only amplifies when Gemini-EXCLUSIVE signals (not generic "based on") are present
-  const geminiTricolon = (geminiHedgePhrases > 0 || geminiBasedOn > 0 || geminiFraming > 0 || geminiMarkdown > 0)
+  // Gemini tricolon — amplifier only if Gemini phrases are present
+  const geminiTricolon = geminiHedgePhrases > 0 || geminiBasedOn > 0
     ? (text.match(/\b\w[\w\s]{2,20},\s*\w[\w\s]{2,20},\s*and\s+\w[\w\s]{2,15}\b/gi) || []).length
     : 0;
 
@@ -1958,13 +1958,11 @@ function aiModelFamilyFingerprint(text: string): { score: number; suspectedFamil
 
   // ── DeepSeek fingerprints ─────────────────────────────────────────────────
   // DeepSeek tends toward formal academic Chinese-influenced English patterns
-  const deepseekFormal = (text.match(/\b(it can be seen that|it is observed that|it is noted that|as can be seen|it is evident that|it is clear that|this paper|this study|this work|the proposed|the aforementioned|the above-mentioned|scholars argue|scholars note|scholars suggest|research suggests|studies show|studies indicate|literature suggests|existing literature|growing body|body of literature|body of evidence|empirical evidence|as evidenced by|as demonstrated by|as argued by|as noted by)\b/gi) || []).length;
+  const deepseekFormal = (text.match(/\b(it can be seen that|it is observed that|it is noted that|as can be seen|it is evident that|it is clear that|this paper|this study|this work|the proposed|the aforementioned|the above-mentioned)\b/gi) || []).length;
   // DeepSeek uses step-by-step reasoning with explicit numbering labels
   const deepseekSteps = (text.match(/\b(step \d|step one|step two|step three|firstly,|secondly,|thirdly,|finally,|to begin with|to start with|in the first place)\b/gi) || []).length;
   // DeepSeek academic hedging patterns
-  const deepseekHedge = (text.match(/\b(to some extent|to a certain extent|in most cases|in general|generally speaking|broadly speaking|in many cases|under certain conditions|given that|provided that|arguably|it could be argued|it can be argued|it may be argued|one could argue|one might argue)\b/gi) || []).length;
-  // DeepSeek high-register academic vocabulary — formal/Latinate terms common in DeepSeek academic output
-  const deepseekAcademic = (text.match(/\b(underpinning|underpins|precipitated|paradigm shift|operationalize|contextualize|conceptualize|delineate|elucidate|explicate|juxtapose|corroborate|substantiate|encapsulate|necessitates|presupposes|encompasses|constitutes|problematizes|synthesizes|hitherto|notwithstanding|inasmuch|insofar|therein|wherein|whereby|heretofore|the aforementioned|literature review|systematic(ally)? compar|ethical (framework|landscape|terrain|vacuum|guidance)|comparative analysis|policy development|research (workflow|process)|scholarly authorship|academic integrity|intellectual (labor|agency|rigor))\b/gi) || []).length;
+  const deepseekHedge = (text.match(/\b(to some extent|to a certain extent|in most cases|in general|generally speaking|broadly speaking|in many cases|under certain conditions|given that|provided that)\b/gi) || []).length;
 
   // ── Score each family ────────────────────────────────────────────────────
   const gpt4Score    = gpt4Dashes * 2 + gpt4Vocab * 3 + gpt4Structure * 2 + gpt4ListIntro * 3 + gpt4Meta * 4;
@@ -1972,7 +1970,7 @@ function aiModelFamilyFingerprint(text: string): { score: number; suspectedFamil
   const llamaScore   = (llamaRate > 0.05 ? Math.min(16, Math.round(llamaRate * 180)) : 0) + llamaFrameMarkers * 2;
   const geminiScore  = geminiHedgePhrases * 3 + geminiBasedOn * 4 + geminiClosings * 3 + geminiFraming * 3 + geminiChoiceFrame * 2 + geminiMarkdown * 2 + geminiTricolon * 2;
   const mistralScore = mistralConcise * 3 + mistralNotes * 4 + mistralDirect * 2;
-  const deepseekScore = deepseekFormal * 4 + deepseekSteps * 3 + deepseekHedge * 3 + deepseekAcademic * 4;
+  const deepseekScore = deepseekFormal * 5 + deepseekSteps * 3 + deepseekHedge * 3;
 
   const rawScores = { gpt4: gpt4Score, claude: claudeScore, llama: llamaScore, gemini: geminiScore, mistral: mistralScore, deepseek: deepseekScore };
 
