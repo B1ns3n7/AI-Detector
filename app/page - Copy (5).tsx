@@ -1903,48 +1903,84 @@ function capitalizationAbuseScore(text: string): { score: number; abuseCount: nu
 //  Score: 0–20 with suspected family label.
 // ─────────────────────────────────────────────────────────────────────────────
 
-function aiModelFamilyFingerprint(text: string): { score: number; suspectedFamily: string | null; confidence: string; details: string } {
+function aiModelFamilyFingerprint(text: string): { score: number; suspectedFamily: string | null; confidence: string; details: string; rawScores: { gpt4: number; claude: number; llama: number; gemini: number; mistral: number; deepseek: number } } {
+  const wordCount = Math.max(text.split(/\s+/).length, 1);
+
   // ── GPT-4 / GPT-4o fingerprints ─────────────────────────────────────────
   // Em-dash overuse is a strong GPT-4o marker (ChatGPT loves —)
-  const gpt4Markers = (text.match(/—/g) || []).length;
-  // Expanded GPT-4o-specific vocabulary (these are well-documented ChatGPT tells)
-  const gpt4Vocab = (text.match(/\b(delve|tapestry|bustling|vibrant|foster|pivotal|leverage|synergy|paradigm|groundbreaking|innovative|transformative|comprehensive|multifaceted|it is important to note|it is worth noting that|in conclusion|in summary|to summarize|shed light|landscape|evolving landscape|crucial role|plays a crucial|deeply rooted|rich history)\b/gi) || []).length;
-  // GPT-4o structural patterns: numbered transitions and "Firstly/Secondly/Lastly"
-  const gpt4Structure = (text.match(/\b(firstly|secondly|thirdly|lastly|in addition to this|on the other hand|as a result of this)\b/gi) || []).length;
+  const gpt4Dashes = (text.match(/—/g) || []).length;
+  // Core GPT-4o vocabulary — these are well-documented ChatGPT tells.
+  // NOTE: "it is important to note", "crucial role" etc. are removed here because
+  // they appear in Gemini output too — moved to a shared AI vocab bucket below.
+  const gpt4Vocab = (text.match(/\b(delve|tapestry|bustling|vibrant|foster|pivotal|leverage|synergy|paradigm|groundbreaking|innovative|transformative|multifaceted|shed light|deeply rooted|rich history|evolving landscape|in summary|to summarize|as a whole|overall|it is important to note|plays a crucial)\b/gi) || []).length;
+  // GPT-4o structural patterns: Firstly/Secondly/Lastly ordering, "In addition to this"
+  const gpt4Structure = (text.match(/\b(firstly|secondly|thirdly|lastly|in addition to this|on the other hand|as a result of this|furthermore|moreover|consequently|in conclusion)\b/gi) || []).length;
+  // GPT-4o characteristic: numbered/bulleted breakdowns introduced with colons, "Here are the top"
+  const gpt4ListIntro = (text.match(/\b(here are|here is a|the following are|consider the following|below are|top \d|best \d|\d\.\s+[A-Z])/g) || []).length;
+  // GPT-4o "Pro-Tip" / "Why it works" / asterisk bullet pattern
+  const gpt4Meta = (text.match(/\bpro.tip\b|\bwhy it works\b|\bwhy it matters\b|\bkey takeaway\b|\btldr\b/gi) || []).length;
 
   // ── Claude fingerprints ──────────────────────────────────────────────────
   // Claude has distinct meta-commentary and hedged-reflection phrases
   const claudeMarkers = (text.match(/\b(nuanced|worth noting|worth considering|it's worth|at its core|at the heart|speaks to|stands as|serves as|taken together|considered together|this raises|this underscores|this illustrates|it's important to recognize|it's important to acknowledge|there's something|there is something|what makes|what this means|this points to|this reflects)\b/gi) || []).length;
 
   // ── Llama 3 fingerprints: heavy hedged modality ──────────────────────────
-  const llamaMarkers = (text.match(/\b(may|might|could)\b/gi) || []).length;
-  const llamaRate = llamaMarkers / Math.max(text.split(/\s+/).length, 1);
+  const llamaModalMarkers = (text.match(/\b(may|might|could)\b/gi) || []).length;
+  const llamaRate = llamaModalMarkers / wordCount;
+  // Llama 3 also produces very long run-on sentences and "In the context of" frames
+  const llamaFrameMarkers = (text.match(/\b(in the context of|within the context|it is worth mentioning|as such|as previously mentioned)\b/gi) || []).length;
 
   // ── Gemini fingerprints ──────────────────────────────────────────────────
-  // FIX: Only count phrases that are UNIQUELY Gemini — "notably" alone is too generic.
-  // Gemini-specific: "it's worth noting", "it is worth noting", "it should be noted"
-  // (NOT "notably" alone — that's too common across all AI and human writing)
-  const geminiPhrases = (text.match(/\b(it's worth noting|it is worth noting|it should be noted|as noted above|as mentioned above|it bears mentioning|it is essential to note)\b/gi) || []).length;
-  // FIX: Tricolon (X, Y, and Z) is universal — only count it when Gemini phrases
-  // are ALSO present, so it amplifies an existing signal rather than creating one.
-  // Without this guard, any well-structured text gets falsely flagged as Gemini.
-  const geminiTricolon = geminiPhrases > 0
+  // Gemini-specific hedging and annotation phrases
+  const geminiHedgePhrases = (text.match(/\b(it's worth noting|it is worth noting|it should be noted|as noted above|as mentioned above|it bears mentioning|it is essential to note|it is crucial to note|it is important to recognize|importantly|notably|keep in mind)\b/gi) || []).length;
+  // Gemini uses "based on" + qualifying phrase heavily in recommendations
+  const geminiBasedOn = (text.match(/\b(based on|depending on whether|whether you prioritize|your primary constraint|your best bet|your best choice|the best choice depends)\b/gi) || []).length;
+  // Gemini summary/recommendation closings
+  const geminiClosings = (text.match(/\b(my recommendation|the bottom line|in short|in brief|the key takeaway|the main takeaway|to put it simply|simply put|the best option is|all things considered)\b/gi) || []).length;
+  // Gemini "contender / champion / specialist" framing in comparisons
+  const geminiFraming = (text.match(/\b(contender|champion|specialist|all-rounder|practical|go-to|go with|the practical|anomaly specialist|deep learning choice|best bet|solid choice|strong choice)\b/gi) || []).length;
+  // Gemini uses "the" + adjective + "choice/option" framing heavily
+  const geminiChoiceFrame = (text.match(/\bthe\s+\w+\s+(choice|option|approach|candidate|method)\b/gi) || []).length;
+  // Gemini-style markdown-heavy asterisk bullets and bold text signifiers (even in plain text output)
+  const geminiMarkdown = (text.match(/\*\*|\* \w|\* Why|\* Pros|\* Cons/g) || []).length;
+  // Gemini tricolon — amplifier only if Gemini phrases are present
+  const geminiTricolon = geminiHedgePhrases > 0 || geminiBasedOn > 0
     ? (text.match(/\b\w[\w\s]{2,20},\s*\w[\w\s]{2,20},\s*and\s+\w[\w\s]{2,15}\b/gi) || []).length
     : 0;
 
+  // ── Mistral fingerprints ─────────────────────────────────────────────────
+  // Mistral tends toward concise, direct phrasing with fewer hedges; common patterns:
+  const mistralConcise = (text.match(/\b(straightforward|to the point|simply put|in essence|essentially|at its simplest|in other words|that is to say|to clarify|put differently)\b/gi) || []).length;
+  // Mistral uses "Note that", "Keep in mind", "Bear in mind" as lightweight hedges
+  const mistralNotes = (text.match(/\b(note that|keep in mind|bear in mind|be aware that|remember that|it's worth remembering|one thing to note)\b/gi) || []).length;
+  // Mistral uses "let's" constructions and direct reader address more often
+  const mistralDirect = (text.match(/\b(let's|let us|you can|you should|you might|you may want|you'll want|you need to|here's how|here is how)\b/gi) || []).length;
+
+  // ── DeepSeek fingerprints ─────────────────────────────────────────────────
+  // DeepSeek tends toward formal academic Chinese-influenced English patterns
+  const deepseekFormal = (text.match(/\b(it can be seen that|it is observed that|it is noted that|as can be seen|it is evident that|it is clear that|this paper|this study|this work|the proposed|the aforementioned|the above-mentioned)\b/gi) || []).length;
+  // DeepSeek uses step-by-step reasoning with explicit numbering labels
+  const deepseekSteps = (text.match(/\b(step \d|step one|step two|step three|firstly,|secondly,|thirdly,|finally,|to begin with|to start with|in the first place)\b/gi) || []).length;
+  // DeepSeek academic hedging patterns
+  const deepseekHedge = (text.match(/\b(to some extent|to a certain extent|in most cases|in general|generally speaking|broadly speaking|in many cases|under certain conditions|given that|provided that)\b/gi) || []).length;
+
   // ── Score each family ────────────────────────────────────────────────────
-  const gpt4Score   = gpt4Markers * 2 + gpt4Vocab * 3 + gpt4Structure * 2;
-  const claudeScore = claudeMarkers * 4;
-  const llamaScore  = llamaRate > 0.05 ? Math.min(20, Math.round(llamaRate * 200)) : 0;
-  // FIX: geminiTricolon is now conditional (0 if no Gemini phrases), so it can't
-  // inflate the score on its own. Gemini must have real phrase-level evidence first.
-  const geminiScore = geminiPhrases * 4 + geminiTricolon * 2;
+  const gpt4Score    = gpt4Dashes * 2 + gpt4Vocab * 3 + gpt4Structure * 2 + gpt4ListIntro * 3 + gpt4Meta * 4;
+  const claudeScore  = claudeMarkers * 4;
+  const llamaScore   = (llamaRate > 0.05 ? Math.min(16, Math.round(llamaRate * 180)) : 0) + llamaFrameMarkers * 2;
+  const geminiScore  = geminiHedgePhrases * 3 + geminiBasedOn * 4 + geminiClosings * 3 + geminiFraming * 3 + geminiChoiceFrame * 2 + geminiMarkdown * 2 + geminiTricolon * 2;
+  const mistralScore = mistralConcise * 3 + mistralNotes * 4 + mistralDirect * 2;
+  const deepseekScore = deepseekFormal * 5 + deepseekSteps * 3 + deepseekHedge * 3;
+
+  const rawScores = { gpt4: gpt4Score, claude: claudeScore, llama: llamaScore, gemini: geminiScore, mistral: mistralScore, deepseek: deepseekScore };
 
   const scores = [
     { family: "GPT-4/GPT-4o", score: gpt4Score },
     { family: "Claude",        score: claudeScore },
     { family: "Llama 3",       score: llamaScore },
     { family: "Gemini",        score: geminiScore },
+    { family: "Mistral",       score: mistralScore },
+    { family: "DeepSeek",      score: deepseekScore },
   ];
 
   // Sort descending to compare top two
@@ -1953,9 +1989,7 @@ function aiModelFamilyFingerprint(text: string): { score: number; suspectedFamil
   const second = sorted[1];
   const totalAISignal = best.score;
 
-  // FIX: Require a meaningful gap between the winner and runner-up.
-  // If scores are close (gap < 5), the signal is ambiguous — don't name a family.
-  // This prevents a near-zero Gemini score from "winning" by default.
+  // Require a meaningful gap between the winner and runner-up.
   const gap = best.score - second.score;
   const clearWinner = gap >= 5;
 
@@ -1969,12 +2003,12 @@ function aiModelFamilyFingerprint(text: string): { score: number; suspectedFamil
   // If no clear winner, leave suspectedFamily null — "Inconclusive" is better than wrong
 
   const details = suspectedFamily
-    ? `Suspected AI family: ${suspectedFamily} (${confidence} confidence). Scores — GPT-4: ${gpt4Score}, Claude: ${claudeScore}, Llama 3: ${llamaScore}, Gemini: ${geminiScore}. Gap vs runner-up: ${gap}. Family fingerprinting is supplementary and should not be used as standalone evidence.`
+    ? `Suspected AI family: ${suspectedFamily} (${confidence} confidence). Scores — GPT-4/GPT-4o: ${gpt4Score}, Claude: ${claudeScore}, Llama 3: ${llamaScore}, Gemini: ${geminiScore}, Mistral: ${mistralScore}, DeepSeek: ${deepseekScore}. Gap vs runner-up: ${gap}. Family fingerprinting is supplementary and should not be used as standalone evidence.`
     : totalAISignal >= 5
       ? `AI family inconclusive — scores too close to distinguish (top: ${best.family} ${best.score}, runner-up: ${second.family} ${second.score}, gap: ${gap}). This does not indicate human authorship.`
       : `No strong AI family fingerprint detected (all family scores < 5). This does not indicate human authorship.`;
 
-  return { score: signalScore, suspectedFamily, confidence, details };
+  return { score: signalScore, suspectedFamily, confidence, details, rawScores };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -4128,7 +4162,7 @@ function runPerplexityEngine(text: string): EngineResult {
   const { score: capAbuseScore, abuseCount: capAbuseCount, details: capAbuseDetails } = capitalizationAbuseScore(text);
 
   // ── NEW Signal 35: AI Model Family Fingerprinting ─────────────────────────
-  const { score: familyFingerprintScore, suspectedFamily, confidence: familyConfidence, details: familyDetails } = aiModelFamilyFingerprint(text);
+  const { score: familyFingerprintScore, suspectedFamily, confidence: familyConfidence, details: familyDetails, rawScores: familyRawScores } = aiModelFamilyFingerprint(text);
 
   // ── NEW Signal 36: Self-BLEU / Repetition-N Score ─────────────────────────
   const { score: selfBleuScoreVal, avgOverlap: selfBleuOverlap, details: selfBleuDetails } = selfBleuScore(sentences);
@@ -4620,10 +4654,13 @@ function runPerplexityEngine(text: string): EngineResult {
     // ── NEW: AI Model Family Fingerprinting ───────────────────────────────────
     {
       name: `AI Model Family Fingerprint${suspectedFamily ? ` — ${suspectedFamily}` : ""}`,
-      value: familyDetails,
+      // Embed rawScores as a parseable suffix so the UI can render the bar chart.
+      value: familyDetails + `\n__rawScores__:${JSON.stringify({ gpt4: familyRawScores.gpt4, claude: familyRawScores.claude, llama: familyRawScores.llama, gemini: familyRawScores.gemini, mistral: familyRawScores.mistral, deepseek: familyRawScores.deepseek })}`,
       strength: Math.min(100, Math.round((familyFingerprintScore / 20) * 100)),
-      pointsToAI: familyFingerprintScore >= 6,
-      wellSupported: familyFingerprintScore >= 12,
+      // FIX: Only surface as an AI signal when confidence is "low" or above (score >= 12).
+      // "very low" confidence (score=6, strength=30) produced too many false Gemini labels.
+      pointsToAI: familyFingerprintScore >= 12,
+      wellSupported: familyFingerprintScore >= 16,
     },
     // ── NEW: Self-BLEU Repetition ─────────────────────────────────────────────
     {
@@ -8385,19 +8422,137 @@ export default function DetectorPage() {
                           </div>
                         )}
 
-                        {/* AI Model Family Fingerprint (when detected with moderate confidence) */}
+                        {/* AI Model Family Fingerprint — grid card layout with hover tooltips */}
                         {perpResult && (() => {
                           const fSig = perpResult.signals.find(s => s.name.startsWith("AI Model Family Fingerprint"));
-                          if (!fSig || fSig.strength < 40) return null;
+                          if (!fSig || fSig.strength < 20) return null;
                           const familyName = fSig.name.includes("—") ? fSig.name.split("—")[1].trim() : null;
-                          if (!familyName) return null;
+
+                          // Parse rawScores from the value suffix
+                          let rawScores: { gpt4: number; claude: number; llama: number; gemini: number; mistral: number; deepseek: number } | null = null;
+                          const rawMatch = fSig.value.match(/__rawScores__:(\{[^}]+\})/);
+                          if (rawMatch) {
+                            try { rawScores = JSON.parse(rawMatch[1]); } catch {}
+                          }
+                          if (!rawScores) return null;
+
+                          const totalScore = rawScores.gpt4 + rawScores.claude + rawScores.llama + rawScores.gemini + rawScores.mistral + rawScores.deepseek;
+                          const confidence = fSig.strength >= 100 ? "Moderate confidence" : fSig.strength >= 60 ? "Low confidence" : "Very low confidence";
+
+                          type FamilyKey = "gpt4" | "claude" | "llama" | "gemini" | "mistral" | "deepseek";
+                          const families: Array<{
+                            key: FamilyKey; label: string; subtitle: string; initials: string;
+                            bg: string; barColor: string; borderColor: string; textColor: string;
+                            tooltip: string;
+                          }> = [
+                            {
+                              key: "gpt4", label: "GPT-4 / GPT-4o", subtitle: "OpenAI", initials: "GP",
+                              bg: "#e8f5e9", barColor: "#16a34a", borderColor: "#bbf7d0", textColor: "#15803d",
+                              tooltip: "Scored on: em-dash overuse, vocabulary (delve, pivotal, leverage, etc.), structural transitions (furthermore, moreover, in conclusion), list introductions (here are the top N…), and meta-phrases (Pro-Tip, Why it works).",
+                            },
+                            {
+                              key: "claude", label: "Claude", subtitle: "Anthropic", initials: "CL",
+                              bg: "#fff7ed", barColor: "#ea580c", borderColor: "#fed7aa", textColor: "#c2410c",
+                              tooltip: "Scored on: meta-commentary phrases (nuanced, worth noting, at its core, speaks to, this underscores), hedged-reflection language (it's important to recognize, taken together, this reflects), and self-referential framing.",
+                            },
+                            {
+                              key: "gemini", label: "Gemini", subtitle: "Google DeepMind", initials: "GE",
+                              bg: "#fef9c3", barColor: "#ca8a04", borderColor: "#fde68a", textColor: "#92400e",
+                              tooltip: "Scored on: recommendation framing (best bet, your primary constraint, based on current research), comparison labels (practical champion, all-rounder, anomaly specialist), closing phrases (my recommendation, all things considered), and markdown asterisk bullets.",
+                            },
+                            {
+                              key: "llama", label: "Llama 3", subtitle: "Meta AI", initials: "LL",
+                              bg: "#fdf2f8", barColor: "#a21caf", borderColor: "#f5d0fe", textColor: "#86198f",
+                              tooltip: "Scored on: high modal hedge density (may/might/could used >5% of words), frame markers (in the context of, as previously mentioned), and run-on sentence structures typical of Llama 3 outputs.",
+                            },
+                            {
+                              key: "mistral", label: "Mistral", subtitle: "Mistral AI", initials: "MI",
+                              bg: "#eff6ff", barColor: "#2563eb", borderColor: "#bfdbfe", textColor: "#1d4ed8",
+                              tooltip: "Scored on: concise direct phrasing (essentially, in essence, simply put), lightweight hedges (note that, keep in mind, bear in mind), and direct reader-address constructions (let's, you can, here's how).",
+                            },
+                            {
+                              key: "deepseek", label: "DeepSeek", subtitle: "DeepSeek AI", initials: "DE",
+                              bg: "#f0fdf4", barColor: "#059669", borderColor: "#a7f3d0", textColor: "#065f46",
+                              tooltip: "Scored on: formal academic Chinese-influenced English (it can be seen that, it is evident that, the aforementioned), step-by-step labeling (step one/two, firstly/secondly/finally), and academic hedging (to some extent, generally speaking, given that).",
+                            },
+                          ];
+
                           return (
-                            <div className="mt-2 flex items-start gap-2 rounded-xl bg-purple-50 border border-purple-200 px-3 py-2.5">
-                              <span className="text-purple-500 text-sm flex-shrink-0">🤖</span>
-                              <div>
-                                <p className="text-xs font-bold text-purple-800 mb-0.5">Suspected AI Family: {familyName}</p>
-                                <p className="text-xs text-purple-700 leading-snug">Stylistic fingerprinting suggests this text may match patterns associated with {familyName}. This is supplementary information only — low confidence, for reviewer reference.</p>
+                            <div className="mt-2 rounded-xl bg-slate-50 border border-slate-200 px-3 py-3">
+                              {/* Header */}
+                              <div className="flex items-center gap-2 mb-3">
+                                <span className="text-base">🤖</span>
+                                <p className="text-xs font-bold text-slate-800">
+                                  {familyName ? `Suspected AI Family: ${familyName}` : "AI Family Signals Detected"}
+                                </p>
                               </div>
+
+                              {/* 3-column grid of cards */}
+                              <div className="grid grid-cols-3 gap-2">
+                                {families.map(({ key, label, subtitle, initials, bg, barColor, borderColor, textColor, tooltip }) => {
+                                  const score = (rawScores as any)[key] as number;
+                                  const pct = totalScore > 0 ? Math.round((score / totalScore) * 100) : 0;
+                                  const isTop = familyName && (
+                                    key === "gpt4" ? familyName.startsWith("GPT") :
+                                    key === "deepseek" ? familyName === "DeepSeek" :
+                                    familyName.toLowerCase() === key
+                                  );
+                                  return (
+                                    <div
+                                      key={key}
+                                      className="relative group rounded-xl border px-2.5 py-2 cursor-default transition-all"
+                                      style={{
+                                        background: isTop ? bg : "#fff",
+                                        borderColor: isTop ? barColor : "#e2e8f0",
+                                        boxShadow: isTop ? `0 0 0 1.5px ${barColor}33` : undefined,
+                                      }}
+                                    >
+                                      {/* Confidence badge on winner */}
+                                      {isTop && (
+                                        <span className="absolute -top-2 left-1/2 -translate-x-1/2 text-[8px] font-bold px-1.5 py-0.5 rounded-full whitespace-nowrap"
+                                          style={{ background: barColor, color: "#fff" }}>
+                                          {confidence}
+                                        </span>
+                                      )}
+
+                                      {/* Avatar */}
+                                      <div className="w-7 h-7 rounded-lg flex items-center justify-center mb-1.5 text-[10px] font-black text-white"
+                                        style={{ background: isTop ? barColor : "#94a3b8" }}>
+                                        {initials}
+                                      </div>
+
+                                      {/* Name */}
+                                      <p className="text-[10px] font-bold text-slate-800 leading-tight">{label}</p>
+                                      <p className="text-[9px] text-slate-400 mb-1.5 leading-tight">{subtitle}</p>
+
+                                      {/* Bar */}
+                                      <div className="h-1 rounded-full bg-slate-100 overflow-hidden mb-1">
+                                        <div className="h-full rounded-full transition-all duration-500"
+                                          style={{ width: `${pct}%`, background: isTop ? barColor : "#94a3b8" }} />
+                                      </div>
+
+                                      {/* Percentage */}
+                                      <p className="text-[10px] font-bold" style={{ color: isTop ? barColor : "#94a3b8" }}>{pct}%</p>
+
+                                      {/* Hover tooltip */}
+                                      <div className="absolute z-50 bottom-full left-1/2 -translate-x-1/2 mb-2 w-52 hidden group-hover:block pointer-events-none">
+                                        <div className="rounded-lg shadow-xl border border-slate-200 bg-white px-3 py-2.5 text-left">
+                                          <p className="text-[10px] font-bold text-slate-800 mb-1">{label} — {pct}% match</p>
+                                          <p className="text-[9px] text-slate-500 leading-relaxed">{tooltip}</p>
+                                          <p className="text-[9px] font-semibold mt-1.5" style={{ color: barColor }}>Raw signal score: {score}</p>
+                                        </div>
+                                        {/* Arrow */}
+                                        <div className="absolute left-1/2 -translate-x-1/2 top-full w-0 h-0"
+                                          style={{ borderLeft: "5px solid transparent", borderRight: "5px solid transparent", borderTop: "5px solid #e2e8f0" }} />
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+
+                              <p className="text-[9px] text-slate-400 mt-2 leading-snug">
+                                Percentages reflect relative stylistic signal strength across all families. Supplementary only — not standalone evidence.
+                              </p>
                             </div>
                           );
                         })()}
