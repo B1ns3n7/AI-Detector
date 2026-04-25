@@ -1903,7 +1903,7 @@ function capitalizationAbuseScore(text: string): { score: number; abuseCount: nu
 //  Score: 0–20 with suspected family label.
 // ─────────────────────────────────────────────────────────────────────────────
 
-function aiModelFamilyFingerprint(text: string): { score: number; suspectedFamily: string | null; confidence: string; details: string; rawScores: { gpt4: number; claude: number; llama: number; gemini: number; mistral: number; deepseek: number } } {
+function aiModelFamilyFingerprint(text: string): { score: number; suspectedFamily: string | null; confidence: string; details: string; rawScores: { gpt4: number; claude: number; llama: number; gemini: number } } {
   const wordCount = Math.max(text.split(/\s+/).length, 1);
 
   // ── GPT-4 / GPT-4o fingerprints ─────────────────────────────────────────
@@ -1948,39 +1948,19 @@ function aiModelFamilyFingerprint(text: string): { score: number; suspectedFamil
     ? (text.match(/\b\w[\w\s]{2,20},\s*\w[\w\s]{2,20},\s*and\s+\w[\w\s]{2,15}\b/gi) || []).length
     : 0;
 
-  // ── Mistral fingerprints ─────────────────────────────────────────────────
-  // Mistral tends toward concise, direct phrasing with fewer hedges; common patterns:
-  const mistralConcise = (text.match(/\b(straightforward|to the point|simply put|in essence|essentially|at its simplest|in other words|that is to say|to clarify|put differently)\b/gi) || []).length;
-  // Mistral uses "Note that", "Keep in mind", "Bear in mind" as lightweight hedges
-  const mistralNotes = (text.match(/\b(note that|keep in mind|bear in mind|be aware that|remember that|it's worth remembering|one thing to note)\b/gi) || []).length;
-  // Mistral uses "let's" constructions and direct reader address more often
-  const mistralDirect = (text.match(/\b(let's|let us|you can|you should|you might|you may want|you'll want|you need to|here's how|here is how)\b/gi) || []).length;
-
-  // ── DeepSeek fingerprints ─────────────────────────────────────────────────
-  // DeepSeek tends toward formal academic Chinese-influenced English patterns
-  const deepseekFormal = (text.match(/\b(it can be seen that|it is observed that|it is noted that|as can be seen|it is evident that|it is clear that|this paper|this study|this work|the proposed|the aforementioned|the above-mentioned)\b/gi) || []).length;
-  // DeepSeek uses step-by-step reasoning with explicit numbering labels
-  const deepseekSteps = (text.match(/\b(step \d|step one|step two|step three|firstly,|secondly,|thirdly,|finally,|to begin with|to start with|in the first place)\b/gi) || []).length;
-  // DeepSeek academic hedging patterns
-  const deepseekHedge = (text.match(/\b(to some extent|to a certain extent|in most cases|in general|generally speaking|broadly speaking|in many cases|under certain conditions|given that|provided that)\b/gi) || []).length;
-
   // ── Score each family ────────────────────────────────────────────────────
-  const gpt4Score    = gpt4Dashes * 2 + gpt4Vocab * 3 + gpt4Structure * 2 + gpt4ListIntro * 3 + gpt4Meta * 4;
-  const claudeScore  = claudeMarkers * 4;
-  const llamaScore   = (llamaRate > 0.05 ? Math.min(16, Math.round(llamaRate * 180)) : 0) + llamaFrameMarkers * 2;
-  const geminiScore  = geminiHedgePhrases * 3 + geminiBasedOn * 4 + geminiClosings * 3 + geminiFraming * 3 + geminiChoiceFrame * 2 + geminiMarkdown * 2 + geminiTricolon * 2;
-  const mistralScore = mistralConcise * 3 + mistralNotes * 4 + mistralDirect * 2;
-  const deepseekScore = deepseekFormal * 5 + deepseekSteps * 3 + deepseekHedge * 3;
+  const gpt4Score   = gpt4Dashes * 2 + gpt4Vocab * 3 + gpt4Structure * 2 + gpt4ListIntro * 3 + gpt4Meta * 4;
+  const claudeScore = claudeMarkers * 4;
+  const llamaScore  = (llamaRate > 0.05 ? Math.min(16, Math.round(llamaRate * 180)) : 0) + llamaFrameMarkers * 2;
+  const geminiScore = geminiHedgePhrases * 3 + geminiBasedOn * 4 + geminiClosings * 3 + geminiFraming * 3 + geminiChoiceFrame * 2 + geminiMarkdown * 2 + geminiTricolon * 2;
 
-  const rawScores = { gpt4: gpt4Score, claude: claudeScore, llama: llamaScore, gemini: geminiScore, mistral: mistralScore, deepseek: deepseekScore };
+  const rawScores = { gpt4: gpt4Score, claude: claudeScore, llama: llamaScore, gemini: geminiScore };
 
   const scores = [
     { family: "GPT-4/GPT-4o", score: gpt4Score },
     { family: "Claude",        score: claudeScore },
     { family: "Llama 3",       score: llamaScore },
     { family: "Gemini",        score: geminiScore },
-    { family: "Mistral",       score: mistralScore },
-    { family: "DeepSeek",      score: deepseekScore },
   ];
 
   // Sort descending to compare top two
@@ -2003,7 +1983,7 @@ function aiModelFamilyFingerprint(text: string): { score: number; suspectedFamil
   // If no clear winner, leave suspectedFamily null — "Inconclusive" is better than wrong
 
   const details = suspectedFamily
-    ? `Suspected AI family: ${suspectedFamily} (${confidence} confidence). Scores — GPT-4/GPT-4o: ${gpt4Score}, Claude: ${claudeScore}, Llama 3: ${llamaScore}, Gemini: ${geminiScore}, Mistral: ${mistralScore}, DeepSeek: ${deepseekScore}. Gap vs runner-up: ${gap}. Family fingerprinting is supplementary and should not be used as standalone evidence.`
+    ? `Suspected AI family: ${suspectedFamily} (${confidence} confidence). Scores — GPT-4/GPT-4o: ${gpt4Score}, Claude: ${claudeScore}, Llama 3: ${llamaScore}, Gemini: ${geminiScore}. Gap vs runner-up: ${gap}. Family fingerprinting is supplementary and should not be used as standalone evidence.`
     : totalAISignal >= 5
       ? `AI family inconclusive — scores too close to distinguish (top: ${best.family} ${best.score}, runner-up: ${second.family} ${second.score}, gap: ${gap}). This does not indicate human authorship.`
       : `No strong AI family fingerprint detected (all family scores < 5). This does not indicate human authorship.`;
@@ -4655,7 +4635,7 @@ function runPerplexityEngine(text: string): EngineResult {
     {
       name: `AI Model Family Fingerprint${suspectedFamily ? ` — ${suspectedFamily}` : ""}`,
       // Embed rawScores as a parseable suffix so the UI can render the bar chart.
-      value: familyDetails + `\n__rawScores__:${JSON.stringify({ gpt4: familyRawScores.gpt4, claude: familyRawScores.claude, llama: familyRawScores.llama, gemini: familyRawScores.gemini, mistral: familyRawScores.mistral, deepseek: familyRawScores.deepseek })}`,
+      value: familyDetails + `\n__rawScores__:${JSON.stringify({ gpt4: familyRawScores.gpt4, claude: familyRawScores.claude, llama: familyRawScores.llama, gemini: familyRawScores.gemini })}`,
       strength: Math.min(100, Math.round((familyFingerprintScore / 20) * 100)),
       // FIX: Only surface as an AI signal when confidence is "low" or above (score >= 12).
       // "very low" confidence (score=6, strength=30) produced too many false Gemini labels.
@@ -8422,136 +8402,71 @@ export default function DetectorPage() {
                           </div>
                         )}
 
-                        {/* AI Model Family Fingerprint — grid card layout with hover tooltips */}
+                        {/* AI Model Family Fingerprint (when detected with any confidence) */}
                         {perpResult && (() => {
                           const fSig = perpResult.signals.find(s => s.name.startsWith("AI Model Family Fingerprint"));
-                          if (!fSig || fSig.strength < 20) return null;
+                          // Show card if there's any meaningful family signal (strength >= 30 = very low confidence)
+                          if (!fSig || fSig.strength < 30) return null;
                           const familyName = fSig.name.includes("—") ? fSig.name.split("—")[1].trim() : null;
 
                           // Parse rawScores from the value suffix
-                          let rawScores: { gpt4: number; claude: number; llama: number; gemini: number; mistral: number; deepseek: number } | null = null;
+                          let rawScores: { gpt4: number; claude: number; llama: number; gemini: number } | null = null;
                           const rawMatch = fSig.value.match(/__rawScores__:(\{[^}]+\})/);
                           if (rawMatch) {
                             try { rawScores = JSON.parse(rawMatch[1]); } catch {}
                           }
-                          if (!rawScores) return null;
 
-                          const totalScore = rawScores.gpt4 + rawScores.claude + rawScores.llama + rawScores.gemini + rawScores.mistral + rawScores.deepseek;
-                          const confidence = fSig.strength >= 100 ? "Moderate confidence" : fSig.strength >= 60 ? "Low confidence" : "Very low confidence";
+                          const maxScore = rawScores ? Math.max(rawScores.gpt4, rawScores.claude, rawScores.llama, rawScores.gemini, 1) : 1;
+                          const confidence = fSig.strength >= 100 ? "moderate" : fSig.strength >= 60 ? "low" : "very low";
+                          const confidenceColor = fSig.strength >= 100 ? "text-purple-800 bg-purple-100" : fSig.strength >= 60 ? "text-indigo-700 bg-indigo-50" : "text-slate-600 bg-slate-100";
 
-                          type FamilyKey = "gpt4" | "claude" | "llama" | "gemini" | "mistral" | "deepseek";
-                          const families: Array<{
-                            key: FamilyKey; label: string; subtitle: string; initials: string;
-                            bg: string; barColor: string; borderColor: string; textColor: string;
-                            tooltip: string;
-                          }> = [
-                            {
-                              key: "gpt4", label: "GPT-4 / GPT-4o", subtitle: "OpenAI", initials: "GP",
-                              bg: "#e8f5e9", barColor: "#16a34a", borderColor: "#bbf7d0", textColor: "#15803d",
-                              tooltip: "Scored on: em-dash overuse, vocabulary (delve, pivotal, leverage, etc.), structural transitions (furthermore, moreover, in conclusion), list introductions (here are the top N…), and meta-phrases (Pro-Tip, Why it works).",
-                            },
-                            {
-                              key: "claude", label: "Claude", subtitle: "Anthropic", initials: "CL",
-                              bg: "#fff7ed", barColor: "#ea580c", borderColor: "#fed7aa", textColor: "#c2410c",
-                              tooltip: "Scored on: meta-commentary phrases (nuanced, worth noting, at its core, speaks to, this underscores), hedged-reflection language (it's important to recognize, taken together, this reflects), and self-referential framing.",
-                            },
-                            {
-                              key: "gemini", label: "Gemini", subtitle: "Google DeepMind", initials: "GE",
-                              bg: "#fef9c3", barColor: "#ca8a04", borderColor: "#fde68a", textColor: "#92400e",
-                              tooltip: "Scored on: recommendation framing (best bet, your primary constraint, based on current research), comparison labels (practical champion, all-rounder, anomaly specialist), closing phrases (my recommendation, all things considered), and markdown asterisk bullets.",
-                            },
-                            {
-                              key: "llama", label: "Llama 3", subtitle: "Meta AI", initials: "LL",
-                              bg: "#fdf2f8", barColor: "#a21caf", borderColor: "#f5d0fe", textColor: "#86198f",
-                              tooltip: "Scored on: high modal hedge density (may/might/could used >5% of words), frame markers (in the context of, as previously mentioned), and run-on sentence structures typical of Llama 3 outputs.",
-                            },
-                            {
-                              key: "mistral", label: "Mistral", subtitle: "Mistral AI", initials: "MI",
-                              bg: "#eff6ff", barColor: "#2563eb", borderColor: "#bfdbfe", textColor: "#1d4ed8",
-                              tooltip: "Scored on: concise direct phrasing (essentially, in essence, simply put), lightweight hedges (note that, keep in mind, bear in mind), and direct reader-address constructions (let's, you can, here's how).",
-                            },
-                            {
-                              key: "deepseek", label: "DeepSeek", subtitle: "DeepSeek AI", initials: "DE",
-                              bg: "#f0fdf4", barColor: "#059669", borderColor: "#a7f3d0", textColor: "#065f46",
-                              tooltip: "Scored on: formal academic Chinese-influenced English (it can be seen that, it is evident that, the aforementioned), step-by-step labeling (step one/two, firstly/secondly/finally), and academic hedging (to some extent, generally speaking, given that).",
-                            },
+                          type FamilyKey = "gpt4" | "claude" | "llama" | "gemini";
+                          const families: Array<{ key: FamilyKey; label: string; color: string; barColor: string }> = [
+                            { key: "gpt4",   label: "GPT-4/4o", color: "text-green-700",  barColor: "#16a34a" },
+                            { key: "claude", label: "Claude",   color: "text-orange-600", barColor: "#ea580c" },
+                            { key: "gemini", label: "Gemini",   color: "text-blue-600",   barColor: "#2563eb" },
+                            { key: "llama",  label: "Llama 3",  color: "text-rose-600",   barColor: "#e11d48" },
                           ];
 
                           return (
-                            <div className="mt-2 rounded-xl bg-slate-50 border border-slate-200 px-3 py-3">
-                              {/* Header */}
-                              <div className="flex items-center gap-2 mb-3">
-                                <span className="text-base">🤖</span>
-                                <p className="text-xs font-bold text-slate-800">
-                                  {familyName ? `Suspected AI Family: ${familyName}` : "AI Family Signals Detected"}
+                            <div className="mt-2 rounded-xl bg-purple-50 border border-purple-200 px-3 py-2.5">
+                              <div className="flex items-center gap-2 mb-1.5">
+                                <span className="text-purple-500 text-sm flex-shrink-0">🤖</span>
+                                <p className="text-xs font-bold text-purple-800 leading-tight">
+                                  {familyName ? `Suspected AI Family: ${familyName}` : "AI Family Signal Detected"}
                                 </p>
+                                <span className={`ml-auto text-[9px] font-bold px-1.5 py-0.5 rounded-full ${confidenceColor}`}>
+                                  {confidence} confidence
+                                </span>
                               </div>
 
-                              {/* 3-column grid of cards */}
-                              <div className="grid grid-cols-3 gap-2">
-                                {families.map(({ key, label, subtitle, initials, bg, barColor, borderColor, textColor, tooltip }) => {
-                                  const score = (rawScores as any)[key] as number;
-                                  const pct = totalScore > 0 ? Math.round((score / totalScore) * 100) : 0;
-                                  const isTop = familyName && (
-                                    key === "gpt4" ? familyName.startsWith("GPT") :
-                                    key === "deepseek" ? familyName === "DeepSeek" :
-                                    familyName.toLowerCase() === key
-                                  );
-                                  return (
-                                    <div
-                                      key={key}
-                                      className="relative group rounded-xl border px-2.5 py-2 cursor-default transition-all"
-                                      style={{
-                                        background: isTop ? bg : "#fff",
-                                        borderColor: isTop ? barColor : "#e2e8f0",
-                                        boxShadow: isTop ? `0 0 0 1.5px ${barColor}33` : undefined,
-                                      }}
-                                    >
-                                      {/* Confidence badge on winner */}
-                                      {isTop && (
-                                        <span className="absolute -top-2 left-1/2 -translate-x-1/2 text-[8px] font-bold px-1.5 py-0.5 rounded-full whitespace-nowrap"
-                                          style={{ background: barColor, color: "#fff" }}>
-                                          {confidence}
-                                        </span>
-                                      )}
-
-                                      {/* Avatar */}
-                                      <div className="w-7 h-7 rounded-lg flex items-center justify-center mb-1.5 text-[10px] font-black text-white"
-                                        style={{ background: isTop ? barColor : "#94a3b8" }}>
-                                        {initials}
-                                      </div>
-
-                                      {/* Name */}
-                                      <p className="text-[10px] font-bold text-slate-800 leading-tight">{label}</p>
-                                      <p className="text-[9px] text-slate-400 mb-1.5 leading-tight">{subtitle}</p>
-
-                                      {/* Bar */}
-                                      <div className="h-1 rounded-full bg-slate-100 overflow-hidden mb-1">
-                                        <div className="h-full rounded-full transition-all duration-500"
-                                          style={{ width: `${pct}%`, background: isTop ? barColor : "#94a3b8" }} />
-                                      </div>
-
-                                      {/* Percentage */}
-                                      <p className="text-[10px] font-bold" style={{ color: isTop ? barColor : "#94a3b8" }}>{pct}%</p>
-
-                                      {/* Hover tooltip */}
-                                      <div className="absolute z-50 bottom-full left-1/2 -translate-x-1/2 mb-2 w-52 hidden group-hover:block pointer-events-none">
-                                        <div className="rounded-lg shadow-xl border border-slate-200 bg-white px-3 py-2.5 text-left">
-                                          <p className="text-[10px] font-bold text-slate-800 mb-1">{label} — {pct}% match</p>
-                                          <p className="text-[9px] text-slate-500 leading-relaxed">{tooltip}</p>
-                                          <p className="text-[9px] font-semibold mt-1.5" style={{ color: barColor }}>Raw signal score: {score}</p>
+                              {/* Mini bar chart for all 4 families */}
+                              {rawScores && (
+                                <div className="mb-1.5 space-y-1">
+                                  {families.map(({ key, label, barColor }) => {
+                                    const score = (rawScores as any)[key] as number;
+                                    const pct = Math.round((score / maxScore) * 100);
+                                    const isTop = familyName && label.toLowerCase().startsWith(familyName.toLowerCase().split("/")[0].toLowerCase());
+                                    return (
+                                      <div key={key} className="flex items-center gap-1.5">
+                                        <span className={`text-[10px] w-16 flex-shrink-0 font-${isTop ? "bold" : "normal"} text-slate-600`}>{label}</span>
+                                        <div className="flex-1 bg-slate-100 rounded-full h-1.5 overflow-hidden">
+                                          <div
+                                            className="h-full rounded-full transition-all"
+                                            style={{ width: `${Math.max(pct, score > 0 ? 3 : 0)}%`, background: barColor, opacity: isTop ? 1 : 0.45 }}
+                                          />
                                         </div>
-                                        {/* Arrow */}
-                                        <div className="absolute left-1/2 -translate-x-1/2 top-full w-0 h-0"
-                                          style={{ borderLeft: "5px solid transparent", borderRight: "5px solid transparent", borderTop: "5px solid #e2e8f0" }} />
+                                        <span className="text-[9px] text-slate-400 w-4 text-right">{score}</span>
                                       </div>
-                                    </div>
-                                  );
-                                })}
-                              </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
 
-                              <p className="text-[9px] text-slate-400 mt-2 leading-snug">
-                                Percentages reflect relative stylistic signal strength across all families. Supplementary only — not standalone evidence.
+                              <p className="text-[10px] text-purple-600 leading-snug">
+                                {familyName
+                                  ? `Stylistic markers suggest patterns associated with ${familyName}. Supplementary signal only — do not use as standalone evidence.`
+                                  : `Multiple AI family signals detected but no single family clearly dominates. Supplementary signal only.`}
                               </p>
                             </div>
                           );
