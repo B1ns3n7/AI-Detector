@@ -8876,8 +8876,9 @@ export default function DetectorPage() {
                         <button key={val} onClick={() => {
                           const newVal = judgment === val ? "" : val;
                           setJudgment(newVal);
-                          // Always refresh reason when switching verdicts; clear when deselecting
-                          setJudgeNotes(newVal ? buildJudgmentBasis(newVal) : "");
+                          if (newVal && !judgeNotes.trim()) {
+                            setJudgeNotes(buildJudgmentBasis(newVal));
+                          }
                           if (newVal && combined) {
                             recordReviewerFeedback(combined.tier.label, newVal, combined.avgAI);
                             const h = loadHistory();
