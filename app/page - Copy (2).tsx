@@ -1933,18 +1933,18 @@ function aiModelFamilyFingerprint(text: string): { score: number; suspectedFamil
   // ── Gemini fingerprints ──────────────────────────────────────────────────
   // Gemini-specific hedging and annotation phrases
   const geminiHedgePhrases = (text.match(/\b(it's worth noting|it is worth noting|it should be noted|as noted above|as mentioned above|it bears mentioning|it is essential to note|it is crucial to note|it is important to recognize|importantly|notably|keep in mind)\b/gi) || []).length;
-  // Gemini uses "based on" + qualifying phrase heavily in recommendations
-  const geminiBasedOn = (text.match(/\b(based on|depending on whether|whether you prioritize|your primary constraint|your best bet|your best choice|the best choice depends)\b/gi) || []).length;
+  // Gemini recommendation/decision context — requires "based on [qualifier]" not generic "based on"
+  const geminiBasedOn = (text.match(/\b(based on (current|recent|our|my|the above|available) (research|analysis|evidence|findings|data|results)|depending on whether|whether you prioritize|your primary constraint|your best bet|your best choice|the best choice depends on)\b/gi) || []).length;
   // Gemini summary/recommendation closings
   const geminiClosings = (text.match(/\b(my recommendation|the bottom line|in short|in brief|the key takeaway|the main takeaway|to put it simply|simply put|the best option is|all things considered)\b/gi) || []).length;
-  // Gemini "contender / champion / specialist" framing in comparisons
-  const geminiFraming = (text.match(/\b(contender|champion|specialist|all-rounder|practical|go-to|go with|the practical|anomaly specialist|deep learning choice|best bet|solid choice|strong choice)\b/gi) || []).length;
-  // Gemini uses "the" + adjective + "choice/option" framing heavily
-  const geminiChoiceFrame = (text.match(/\bthe\s+\w+\s+(choice|option|approach|candidate|method)\b/gi) || []).length;
+  // Gemini-exclusive competitive framing — must be clearly recommendation-style labels, not generic academic words
+  const geminiFraming = (text.match(/\b(all-rounder|practical champion|anomaly specialist|deep learning choice|the practical choice|the safe choice|your best bet|go-to choice|go-to option|go-to tool|solid choice|strong choice|clear winner|top contender|the right pick|best pick)\b/gi) || []).length;
+  // Gemini "the [adj] choice/option/approach" in recommendation context — only when adjacent to comparisons
+  const geminiChoiceFrame = (text.match(/\bthe\s+(best|top|safest|easiest|simplest|fastest|most (practical|efficient|reliable))\s+(choice|option|approach|candidate|method)\b/gi) || []).length;
   // Gemini-style markdown-heavy asterisk bullets and bold text signifiers (even in plain text output)
   const geminiMarkdown = (text.match(/\*\*|\* \w|\* Why|\* Pros|\* Cons/g) || []).length;
-  // Gemini tricolon — amplifier only if Gemini phrases are present
-  const geminiTricolon = geminiHedgePhrases > 0 || geminiBasedOn > 0
+  // Gemini tricolon — only amplifies when Gemini-EXCLUSIVE signals (not generic "based on") are present
+  const geminiTricolon = (geminiHedgePhrases > 0 || geminiBasedOn > 0 || geminiFraming > 0 || geminiMarkdown > 0)
     ? (text.match(/\b\w[\w\s]{2,20},\s*\w[\w\s]{2,20},\s*and\s+\w[\w\s]{2,15}\b/gi) || []).length
     : 0;
 
@@ -1958,11 +1958,13 @@ function aiModelFamilyFingerprint(text: string): { score: number; suspectedFamil
 
   // ── DeepSeek fingerprints ─────────────────────────────────────────────────
   // DeepSeek tends toward formal academic Chinese-influenced English patterns
-  const deepseekFormal = (text.match(/\b(it can be seen that|it is observed that|it is noted that|as can be seen|it is evident that|it is clear that|this paper|this study|this work|the proposed|the aforementioned|the above-mentioned)\b/gi) || []).length;
+  const deepseekFormal = (text.match(/\b(it can be seen that|it is observed that|it is noted that|as can be seen|it is evident that|it is clear that|this paper|this study|this work|the proposed|the aforementioned|the above-mentioned|scholars argue|scholars note|scholars suggest|research suggests|studies show|studies indicate|literature suggests|existing literature|growing body|body of literature|body of evidence|empirical evidence|as evidenced by|as demonstrated by|as argued by|as noted by)\b/gi) || []).length;
   // DeepSeek uses step-by-step reasoning with explicit numbering labels
   const deepseekSteps = (text.match(/\b(step \d|step one|step two|step three|firstly,|secondly,|thirdly,|finally,|to begin with|to start with|in the first place)\b/gi) || []).length;
   // DeepSeek academic hedging patterns
-  const deepseekHedge = (text.match(/\b(to some extent|to a certain extent|in most cases|in general|generally speaking|broadly speaking|in many cases|under certain conditions|given that|provided that)\b/gi) || []).length;
+  const deepseekHedge = (text.match(/\b(to some extent|to a certain extent|in most cases|in general|generally speaking|broadly speaking|in many cases|under certain conditions|given that|provided that|arguably|it could be argued|it can be argued|it may be argued|one could argue|one might argue)\b/gi) || []).length;
+  // DeepSeek high-register academic vocabulary — formal/Latinate terms common in DeepSeek academic output
+  const deepseekAcademic = (text.match(/\b(underpinning|underpins|precipitated|paradigm shift|operationalize|contextualize|conceptualize|delineate|elucidate|explicate|juxtapose|corroborate|substantiate|encapsulate|necessitates|presupposes|encompasses|constitutes|problematizes|synthesizes|hitherto|notwithstanding|inasmuch|insofar|therein|wherein|whereby|heretofore|the aforementioned|literature review|systematic(ally)? compar|ethical (framework|landscape|terrain|vacuum|guidance)|comparative analysis|policy development|research (workflow|process)|scholarly authorship|academic integrity|intellectual (labor|agency|rigor))\b/gi) || []).length;
 
   // ── Score each family ────────────────────────────────────────────────────
   const gpt4Score    = gpt4Dashes * 2 + gpt4Vocab * 3 + gpt4Structure * 2 + gpt4ListIntro * 3 + gpt4Meta * 4;
@@ -1970,7 +1972,7 @@ function aiModelFamilyFingerprint(text: string): { score: number; suspectedFamil
   const llamaScore   = (llamaRate > 0.05 ? Math.min(16, Math.round(llamaRate * 180)) : 0) + llamaFrameMarkers * 2;
   const geminiScore  = geminiHedgePhrases * 3 + geminiBasedOn * 4 + geminiClosings * 3 + geminiFraming * 3 + geminiChoiceFrame * 2 + geminiMarkdown * 2 + geminiTricolon * 2;
   const mistralScore = mistralConcise * 3 + mistralNotes * 4 + mistralDirect * 2;
-  const deepseekScore = deepseekFormal * 5 + deepseekSteps * 3 + deepseekHedge * 3;
+  const deepseekScore = deepseekFormal * 4 + deepseekSteps * 3 + deepseekHedge * 3 + deepseekAcademic * 4;
 
   const rawScores = { gpt4: gpt4Score, claude: claudeScore, llama: llamaScore, gemini: geminiScore, mistral: mistralScore, deepseek: deepseekScore };
 
@@ -5916,7 +5918,8 @@ const HOW_IT_WORKS_TECHNIQUES = [
     id: 1,
     icon: "📉",
     title: "Perplexity Analysis",
-    color: "border-blue-400",
+    borderColor: "#3b82f6",
+    bgCard: "#eff6ff",
     badge: "bg-blue-100 text-blue-700",
     badgeLabel: "Core Method",
     body: "The most foundational method. Perplexity measures how \"surprising\" a piece of text is to a language model - how unpredictable each word choice is. AI-generated text tends to have low perplexity because models gravitate toward statistically likely word sequences, while humans make more unexpected, idiosyncratic word choices.",
@@ -5925,7 +5928,8 @@ const HOW_IT_WORKS_TECHNIQUES = [
     id: 2,
     icon: "📊",
     title: "Burstiness Detection",
-    color: "border-green-400",
+    borderColor: "#16a34a",
+    bgCard: "#f0fdf4",
     badge: "bg-green-100 text-green-700",
     badgeLabel: "Rhythm Signal",
     body: "Human writing has burstiness - it alternates between complex, long sentences and short, punchy ones. AI text tends to be rhythmically uniform: sentence lengths and complexity stay suspiciously consistent throughout a passage. Detectors measure the coefficient of variation (CV) of sentence lengths to flag this flatness.",
@@ -5934,7 +5938,8 @@ const HOW_IT_WORKS_TECHNIQUES = [
     id: 3,
     icon: "🔬",
     title: "Stylometric Fingerprinting",
-    color: "border-purple-400",
+    borderColor: "#9333ea",
+    bgCard: "#faf5ff",
     badge: "bg-purple-100 text-purple-700",
     badgeLabel: "Deep Signal",
     body: "Examines deeper stylistic patterns. Type-Token Ratio (TTR) measures how many unique words vs. total words appear - AI text tends to reuse common vocabulary, lowering TTR. Bigram/trigram density flags overused word-pair combinations that are statistically \"safe\". AI also gravitates toward neutral, balanced sentence construction and avoids things like em-dashes, ellipses, or abrupt fragments.",
@@ -5943,7 +5948,8 @@ const HOW_IT_WORKS_TECHNIQUES = [
     id: 4,
     icon: "🔏",
     title: "Watermarking",
-    color: "border-cyan-400",
+    borderColor: "#0891b2",
+    bgCard: "#ecfeff",
     badge: "bg-cyan-100 text-cyan-700",
     badgeLabel: "Emerging",
     body: "Some generators (OpenAI and research tools) embed statistical watermarks - subtle biases in token selection during generation, e.g. always preferring certain synonym choices. Detectors that know the watermark pattern can verify origin. This is still emerging and not universally deployed.",
@@ -5952,7 +5958,8 @@ const HOW_IT_WORKS_TECHNIQUES = [
     id: 5,
     icon: "🧲",
     title: "Semantic Coherence & Topic Drift",
-    color: "border-amber-400",
+    borderColor: "#d97706",
+    bgCard: "#fffbeb",
     badge: "bg-amber-100 text-amber-700",
     badgeLabel: "Structural",
     body: "AI text tends to stay very on-topic with smooth transitions. Human writing often drifts, contradicts itself, or includes tangential thoughts. Some detectors flag text that is too coherent or too perfectly organized as a sign of machine authorship.",
@@ -5961,7 +5968,8 @@ const HOW_IT_WORKS_TECHNIQUES = [
     id: 6,
     icon: "🤖",
     title: "Training-Based Classifiers",
-    color: "border-red-400",
+    borderColor: "#dc2626",
+    bgCard: "#fef2f2",
     badge: "bg-red-100 text-red-700",
     badgeLabel: "Dominant Approach",
     body: "Tools like GPTZero, Originality.ai, and Turnitin train binary classifiers - often fine-tuned transformers like RoBERTa - on large labeled datasets of human vs. AI text. The model learns subtle distributional patterns too complex to describe as rules. This is increasingly the dominant approach in commercial tools.",
@@ -5970,7 +5978,8 @@ const HOW_IT_WORKS_TECHNIQUES = [
     id: 7,
     icon: "📐",
     title: "MTLD Lexical Diversity",
-    color: "border-teal-400",
+    borderColor: "#0d9488",
+    bgCard: "#f0fdfa",
     badge: "bg-teal-100 text-teal-700",
     badgeLabel: "Research-Grade",
     body: "Measure of Textual Lexical Diversity (MTLD) is a length-invariant vocabulary richness metric used in computational linguistics research. Unlike simple type-token ratio (TTR), MTLD doesn't artificially inflate for short texts. AI models recycle a limited vocabulary systematically (low MTLD); human writers vary their word choices more naturally (high MTLD). This tool computes both forward and reverse MTLD for stability.",
@@ -5979,7 +5988,8 @@ const HOW_IT_WORKS_TECHNIQUES = [
     id: 8,
     icon: "🔁",
     title: "Semantic Self-Similarity",
-    color: "border-indigo-400",
+    borderColor: "#4f46e5",
+    bgCard: "#eef2ff",
     badge: "bg-indigo-100 text-indigo-700",
     badgeLabel: "Novel Signal",
     body: "AI models express the same conceptual ideas using synonym rotation — 'plays a crucial role' becomes 'serves a vital function' becomes 'fulfills an essential purpose'. Human writers focus on specific ideas without exhausting a synonym thesaurus. This detector measures how many words from the same conceptual cluster (importance, enhancement, facilitation, etc.) appear in a single document.",
@@ -5988,7 +5998,8 @@ const HOW_IT_WORKS_TECHNIQUES = [
     id: 9,
     icon: "🎭",
     title: "Tone Register Flatness",
-    color: "border-rose-400",
+    borderColor: "#e11d48",
+    bgCard: "#fff1f2",
     badge: "bg-rose-100 text-rose-700",
     badgeLabel: "Novel Signal",
     body: "Human writers modulate emotional tone — they are enthusiastic in some places, critical in others, uncertain elsewhere. AI maintains a suspiciously consistent neutral-to-positive register throughout entire documents, as if written by someone who never gets excited, frustrated, or genuinely uncertain. This detector measures per-sentence sentiment valence variance; low variance with neutral-positive bias is an AI fingerprint.",
@@ -6190,7 +6201,15 @@ function HowItWorksSection() {
               <div
                 key={t.id}
                 onClick={() => setExpandedId(expandedId === t.id ? null : t.id)}
-                className={`cursor-pointer rounded-xl border-l-4 ${t.color} bg-white border border-slate-100 px-4 py-3 space-y-1.5 hover:bg-slate-50 transition-colors`}
+                className="cursor-pointer rounded-xl border px-4 py-3 space-y-1.5 transition-all hover:brightness-95"
+                style={{
+                  borderLeftWidth: "4px",
+                  borderLeftColor: t.borderColor,
+                  borderTopColor: `${t.borderColor}33`,
+                  borderRightColor: `${t.borderColor}33`,
+                  borderBottomColor: `${t.borderColor}33`,
+                  background: t.bgCard,
+                }}
               >
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2">

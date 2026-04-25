@@ -1903,85 +1903,106 @@ function capitalizationAbuseScore(text: string): { score: number; abuseCount: nu
 //  Score: 0–20 with suspected family label.
 // ─────────────────────────────────────────────────────────────────────────────
 
-function aiModelFamilyFingerprint(text: string): { score: number; suspectedFamily: string | null; confidence: string; details: string; rawScores: { gpt4: number; claude: number; llama: number; gemini: number; mistral: number; deepseek: number } } {
+function aiModelFamilyFingerprint(text: string): { score: number; suspectedFamily: string | null; confidence: string; details: string; rawScores: { gpt4: number; claude: number; llama: number; gemini: number; perplexity: number; deepseek: number } } {
   const wordCount = Math.max(text.split(/\s+/).length, 1);
 
   // ── GPT-4 / GPT-4o fingerprints ─────────────────────────────────────────
   // Em-dash overuse is a strong GPT-4o marker (ChatGPT loves —)
   const gpt4Dashes = (text.match(/—/g) || []).length;
-  // Core GPT-4o vocabulary — these are well-documented ChatGPT tells.
-  // NOTE: "it is important to note", "crucial role" etc. are removed here because
-  // they appear in Gemini output too — moved to a shared AI vocab bucket below.
-  const gpt4Vocab = (text.match(/\b(delve|tapestry|bustling|vibrant|foster|pivotal|leverage|synergy|paradigm|groundbreaking|innovative|transformative|multifaceted|shed light|deeply rooted|rich history|evolving landscape|in summary|to summarize|as a whole|overall|it is important to note|plays a crucial)\b/gi) || []).length;
-  // GPT-4o structural patterns: Firstly/Secondly/Lastly ordering, "In addition to this"
-  const gpt4Structure = (text.match(/\b(firstly|secondly|thirdly|lastly|in addition to this|on the other hand|as a result of this|furthermore|moreover|consequently|in conclusion)\b/gi) || []).length;
-  // GPT-4o characteristic: numbered/bulleted breakdowns introduced with colons, "Here are the top"
-  const gpt4ListIntro = (text.match(/\b(here are|here is a|the following are|consider the following|below are|top \d|best \d|\d\.\s+[A-Z])/g) || []).length;
-  // GPT-4o "Pro-Tip" / "Why it works" / asterisk bullet pattern
-  const gpt4Meta = (text.match(/\bpro.tip\b|\bwhy it works\b|\bwhy it matters\b|\bkey takeaway\b|\btldr\b/gi) || []).length;
+  // Core GPT-4o vocabulary — well-documented ChatGPT tells (2023-2025 research).
+  // Excludes "it is important to note", "crucial role" — also appear in Gemini.
+  const gpt4Vocab = (text.match(/\b(delve|delving|tapestry|bustling|vibrant|foster|fostering|pivotal|leverage|leveraging|synergy|paradigm|groundbreaking|innovative|transformative|multifaceted|shed light|deeply rooted|rich history|evolving landscape|in summary|to summarize|as a whole|it is important to note|plays a crucial|crucial role|key takeaway|nuanced approach|comprehensive overview|thought-provoking|game-changer|game-changing)\b/gi) || []).length;
+  // GPT-4o structural transitions — "Firstly/Secondly/Lastly" ordering is a well-known GPT-4 tell
+  const gpt4Structure = (text.match(/\b(firstly|secondly|thirdly|lastly|in addition to this|on the other hand|as a result of this|furthermore|moreover|consequently|in conclusion|to conclude|to wrap up|in essence)\b/gi) || []).length;
+  // GPT-4o list intros — numbered/bulleted breakdowns with colons
+  const gpt4ListIntro = (text.match(/\b(here are|here is a|the following are|consider the following|below are|top \d|best \d|\d key |\d important )/g) || []).length;
+  // GPT-4o meta-phrases and section labels
+  const gpt4Meta = (text.match(/\bpro.tip\b|\bwhy it works\b|\bwhy it matters\b|\bkey takeaway\b|\btldr\b|\bin this (article|post|guide|piece|essay)\b|\blet's (explore|dive|break down|unpack|look at)\b/gi) || []).length;
+  // GPT-4o hedged certainty — "It's worth noting that", "This is particularly important"
+  const gpt4Hedged = (text.match(/\b(it's worth noting|this is particularly|particularly important|especially important|this is especially|this highlights|this demonstrates|this underscores|this showcases|this emphasizes)\b/gi) || []).length;
 
   // ── Claude fingerprints ──────────────────────────────────────────────────
-  // Claude has distinct meta-commentary and hedged-reflection phrases
-  const claudeMarkers = (text.match(/\b(nuanced|worth noting|worth considering|it's worth|at its core|at the heart|speaks to|stands as|serves as|taken together|considered together|this raises|this underscores|this illustrates|it's important to recognize|it's important to acknowledge|there's something|there is something|what makes|what this means|this points to|this reflects)\b/gi) || []).length;
+  // Claude has distinct meta-commentary, hedged-reflection, and self-referential phrases.
+  // Based on documented Claude 2/3/3.5/3.7 output patterns (Anthropic 2023-2025).
+  const claudeMarkers = (text.match(/\b(nuanced|worth noting|worth considering|it's worth|at its core|at the heart of|speaks to|stands as|serves as|taken together|considered together|this raises|this underscores|this illustrates|it's important to recognize|it's important to acknowledge|there's something|there is something|what makes|what this means|this points to|this reflects|grapple with|grappling with|reckoning|the tension between|navigating|a certain|a kind of)\b/gi) || []).length;
+  // Claude-specific hedging and epistemic humility phrases
+  const claudeEpistemic = (text.match(/\b(I should note|I want to be clear|I think it's worth|to be clear|to be honest|to be fair|I'd be remiss|I'd argue|I believe|I think|admittedly|candidly|frankly speaking|in my view|from my perspective|one could argue that|it's complicated|it's complex|it depends|the answer is nuanced)\b/gi) || []).length;
+  // Claude structural patterns: extensive nested qualifications and parenthetical asides
+  const claudeQualify = (text.match(/\b(though it's worth|though this|though the|even if|even though|even when|even as|while acknowledging|while recognizing|while noting|with that said|that said|having said that|all that said|with all that in mind)\b/gi) || []).length;
 
-  // ── Llama 3 fingerprints: heavy hedged modality ──────────────────────────
+  // ── Llama 3 / Llama 3.1 / Llama 3.3 fingerprints ───────────────────────
+  // Heavy hedged modality is the strongest Llama 3 signal
   const llamaModalMarkers = (text.match(/\b(may|might|could)\b/gi) || []).length;
   const llamaRate = llamaModalMarkers / wordCount;
-  // Llama 3 also produces very long run-on sentences and "In the context of" frames
-  const llamaFrameMarkers = (text.match(/\b(in the context of|within the context|it is worth mentioning|as such|as previously mentioned)\b/gi) || []).length;
+  // Llama 3 frame markers: "In the context of", "as previously mentioned", run-on structures
+  const llamaFrameMarkers = (text.match(/\b(in the context of|within the context of|it is worth mentioning|as such|as previously mentioned|as mentioned earlier|as discussed above|as noted above|it should be mentioned|it is important to mention|broadly speaking|in a broader sense|from a broader perspective)\b/gi) || []).length;
+  // Llama 3 tends to use "I hope this helps", "Let me know if", "Feel free to" closings
+  const llamaClosings = (text.match(/\b(i hope this (helps|clarifies|answers)|let me know if (you have|you need|there's)|feel free to (ask|reach out|let me know)|if you have any (questions|concerns|doubts)|don't hesitate to|please (let me know|feel free|don't hesitate))\b/gi) || []).length;
+  // Llama 3 over-explains with "This means that", "This is because", "In other words"
+  const llamaOverExplain = (text.match(/\b(this means that|this is because|in other words|to put it another way|to put it differently|what this means is|what this tells us|what this shows us|this essentially means|this effectively means)\b/gi) || []).length;
 
-  // ── Gemini fingerprints ──────────────────────────────────────────────────
-  // Gemini-specific hedging and annotation phrases
-  const geminiHedgePhrases = (text.match(/\b(it's worth noting|it is worth noting|it should be noted|as noted above|as mentioned above|it bears mentioning|it is essential to note|it is crucial to note|it is important to recognize|importantly|notably|keep in mind)\b/gi) || []).length;
-  // Gemini recommendation/decision context — requires "based on [qualifier]" not generic "based on"
-  const geminiBasedOn = (text.match(/\b(based on (current|recent|our|my|the above|available) (research|analysis|evidence|findings|data|results)|depending on whether|whether you prioritize|your primary constraint|your best bet|your best choice|the best choice depends on)\b/gi) || []).length;
-  // Gemini summary/recommendation closings
-  const geminiClosings = (text.match(/\b(my recommendation|the bottom line|in short|in brief|the key takeaway|the main takeaway|to put it simply|simply put|the best option is|all things considered)\b/gi) || []).length;
-  // Gemini-exclusive competitive framing — must be clearly recommendation-style labels, not generic academic words
-  const geminiFraming = (text.match(/\b(all-rounder|practical champion|anomaly specialist|deep learning choice|the practical choice|the safe choice|your best bet|go-to choice|go-to option|go-to tool|solid choice|strong choice|clear winner|top contender|the right pick|best pick)\b/gi) || []).length;
-  // Gemini "the [adj] choice/option/approach" in recommendation context — only when adjacent to comparisons
-  const geminiChoiceFrame = (text.match(/\bthe\s+(best|top|safest|easiest|simplest|fastest|most (practical|efficient|reliable))\s+(choice|option|approach|candidate|method)\b/gi) || []).length;
-  // Gemini-style markdown-heavy asterisk bullets and bold text signifiers (even in plain text output)
-  const geminiMarkdown = (text.match(/\*\*|\* \w|\* Why|\* Pros|\* Cons/g) || []).length;
-  // Gemini tricolon — only amplifies when Gemini-EXCLUSIVE signals (not generic "based on") are present
+  // ── Gemini / Gemini 1.5 / Gemini 2.0 fingerprints ──────────────────────
+  // Gemini-specific hedging and annotation phrases (well-documented Google DeepMind patterns)
+  const geminiHedgePhrases = (text.match(/\b(it's worth noting|it is worth noting|it should be noted|as noted above|as mentioned above|it bears mentioning|it is essential to note|it is crucial to note|it is important to recognize|importantly|notably|keep in mind|it's important to keep in mind)\b/gi) || []).length;
+  // Gemini recommendation/decision framing — requires qualified "based on" not generic
+  const geminiBasedOn = (text.match(/\b(based on (current|recent|our|my|the above|available|these) (research|analysis|evidence|findings|data|results|factors)|depending on whether|whether you prioritize|your primary constraint|your best bet|your best choice|the best choice depends on|ultimately depends on)\b/gi) || []).length;
+  // Gemini summary and recommendation closings
+  const geminiClosings = (text.match(/\b(my recommendation|the bottom line|in short|in brief|the key takeaway|the main takeaway|to put it simply|the best option is|all things considered|ultimately,|at the end of the day)\b/gi) || []).length;
+  // Gemini competitive/comparison framing labels — distinctive product comparison style
+  const geminiFraming = (text.match(/\b(all-rounder|practical champion|anomaly specialist|deep learning choice|the practical choice|the safe choice|your best bet|go-to choice|go-to option|go-to tool|solid choice|strong choice|clear winner|top contender|the right pick|best pick|well-rounded|a versatile choice)\b/gi) || []).length;
+  // Gemini "the [adj] choice/option/approach" pattern in recommendation context
+  const geminiChoiceFrame = (text.match(/\bthe\s+(best|top|safest|easiest|simplest|fastest|most (practical|efficient|reliable|suitable|appropriate))\s+(choice|option|approach|candidate|method|solution)\b/gi) || []).length;
+  // Gemini markdown-heavy asterisk bullets and bold signifiers (common in Gemini plain text)
+  const geminiMarkdown = (text.match(/\*\*|\* \w|\* Why|\* Pros|\* Cons|\* Note|\* Key|\* Important/g) || []).length;
+  // Gemini uses "Here's a breakdown", "Here's a summary", "Here's what" frequently
+  const geminiHeres = (text.match(/\bhere'?s\s+(a\s+)?(breakdown|summary|overview|comparison|quick|what|how|why|the)/gi) || []).length;
+  // Gemini tricolon — only amplified when Gemini-exclusive signals are also present
   const geminiTricolon = (geminiHedgePhrases > 0 || geminiBasedOn > 0 || geminiFraming > 0 || geminiMarkdown > 0)
     ? (text.match(/\b\w[\w\s]{2,20},\s*\w[\w\s]{2,20},\s*and\s+\w[\w\s]{2,15}\b/gi) || []).length
     : 0;
 
-  // ── Mistral fingerprints ─────────────────────────────────────────────────
-  // Mistral tends toward concise, direct phrasing with fewer hedges; common patterns:
-  const mistralConcise = (text.match(/\b(straightforward|to the point|simply put|in essence|essentially|at its simplest|in other words|that is to say|to clarify|put differently)\b/gi) || []).length;
-  // Mistral uses "Note that", "Keep in mind", "Bear in mind" as lightweight hedges
-  const mistralNotes = (text.match(/\b(note that|keep in mind|bear in mind|be aware that|remember that|it's worth remembering|one thing to note)\b/gi) || []).length;
-  // Mistral uses "let's" constructions and direct reader address more often
-  const mistralDirect = (text.match(/\b(let's|let us|you can|you should|you might|you may want|you'll want|you need to|here's how|here is how)\b/gi) || []).length;
+  // ── Perplexity AI fingerprints ────────────────────────────────────────────
+  // Perplexity AI uses citation-forward language and search-engine-influenced phrasing.
+  // It tends to surface information with explicit sourcing hedges and ranked/listed formats.
+  // Perplexity answers are often structured as a direct answer followed by "according to" sourcing.
+  const perplexityCitation = (text.match(/\b(according to|as reported by|as stated by|as noted by|as found by|as indicated by|per [A-Z]|citing|sources indicate|sources suggest|research indicates|studies indicate|evidence suggests|data shows|data indicates|reports indicate|findings suggest|findings show)\b/gi) || []).length;
+  // Perplexity uses ranked/enumerated answer patterns — "The top X", "X key factors", "X main reasons"
+  const perplexityRanked = (text.match(/\b(the top \d|the \d (best|main|key|primary|most important)|key (factors|reasons|aspects|points|benefits|differences|considerations)|main (reasons|factors|aspects|points|differences|considerations)|primary (reasons|factors|advantages|disadvantages)|notable (examples|differences|features|aspects))\b/gi) || []).length;
+  // Perplexity synthesizer language — aggregating multiple sources into one answer
+  const perplexitySynth = (text.match(/\b(in summary|to summarize|overall,|in general,|generally,|collectively|taken together|as a whole|across (these|multiple|various|different) sources|multiple sources (suggest|indicate|agree|confirm|note)|experts (agree|suggest|note|recommend|argue|believe))\b/gi) || []).length;
+  // Perplexity uses "as of [date/year]" for temporal grounding from search results
+  const perplexityTemporal = (text.match(/\bas of (20\d\d|january|february|march|april|may|june|july|august|september|october|november|december|today|now|recently|the latest|the most recent)\b/gi) || []).length;
+  // Perplexity direct answer opener — "X is a...", "X refers to...", "X is defined as..." (encyclopedia-style)
+  const perplexityDefinition = (text.match(/\b(is defined as|refers to|is described as|is characterized by|can be defined as|is commonly defined as|is broadly defined as|is understood as|is known as)\b/gi) || []).length;
 
-  // ── DeepSeek fingerprints ─────────────────────────────────────────────────
-  // DeepSeek tends toward formal academic Chinese-influenced English patterns
-  const deepseekFormal = (text.match(/\b(it can be seen that|it is observed that|it is noted that|as can be seen|it is evident that|it is clear that|this paper|this study|this work|the proposed|the aforementioned|the above-mentioned|scholars argue|scholars note|scholars suggest|research suggests|studies show|studies indicate|literature suggests|existing literature|growing body|body of literature|body of evidence|empirical evidence|as evidenced by|as demonstrated by|as argued by|as noted by)\b/gi) || []).length;
-  // DeepSeek uses step-by-step reasoning with explicit numbering labels
-  const deepseekSteps = (text.match(/\b(step \d|step one|step two|step three|firstly,|secondly,|thirdly,|finally,|to begin with|to start with|in the first place)\b/gi) || []).length;
-  // DeepSeek academic hedging patterns
-  const deepseekHedge = (text.match(/\b(to some extent|to a certain extent|in most cases|in general|generally speaking|broadly speaking|in many cases|under certain conditions|given that|provided that|arguably|it could be argued|it can be argued|it may be argued|one could argue|one might argue)\b/gi) || []).length;
-  // DeepSeek high-register academic vocabulary — formal/Latinate terms common in DeepSeek academic output
-  const deepseekAcademic = (text.match(/\b(underpinning|underpins|precipitated|paradigm shift|operationalize|contextualize|conceptualize|delineate|elucidate|explicate|juxtapose|corroborate|substantiate|encapsulate|necessitates|presupposes|encompasses|constitutes|problematizes|synthesizes|hitherto|notwithstanding|inasmuch|insofar|therein|wherein|whereby|heretofore|the aforementioned|literature review|systematic(ally)? compar|ethical (framework|landscape|terrain|vacuum|guidance)|comparative analysis|policy development|research (workflow|process)|scholarly authorship|academic integrity|intellectual (labor|agency|rigor))\b/gi) || []).length;
+  // ── DeepSeek / DeepSeek-V2 / DeepSeek-R1 fingerprints ───────────────────
+  // DeepSeek uses formal academic Chinese-influenced English patterns (documented 2024-2025)
+  const deepseekFormal = (text.match(/\b(it can be seen that|it is observed that|it is noted that|as can be seen|it is evident that|it is clear that|this paper|this study|this work|the proposed|the aforementioned|the above-mentioned|scholars argue|scholars note|scholars suggest|research suggests|studies show|studies indicate|literature suggests|existing literature|growing body|body of literature|body of evidence|empirical evidence|as evidenced by|as demonstrated by|as argued by|as noted by|as shown by)\b/gi) || []).length;
+  // DeepSeek step-by-step reasoning with explicit numbering — common in DeepSeek-R1 chain-of-thought
+  const deepseekSteps = (text.match(/\b(step \d|step one|step two|step three|firstly,|secondly,|thirdly,|finally,|to begin with|to start with|in the first place|first and foremost|last but not least)\b/gi) || []).length;
+  // DeepSeek academic hedging — formal hedges common in Chinese academic English writing
+  const deepseekHedge = (text.match(/\b(to some extent|to a certain extent|in most cases|in general|generally speaking|broadly speaking|in many cases|under certain conditions|given that|provided that|arguably|it could be argued|it can be argued|it may be argued|one could argue|one might argue|to a large extent|to a greater extent)\b/gi) || []).length;
+  // DeepSeek high-register academic vocabulary (Latinate/formal terms in DeepSeek academic output)
+  const deepseekAcademic = (text.match(/\b(underpinning|underpins|precipitated|paradigm shift|operationalize|contextualize|conceptualize|delineate|elucidate|explicate|juxtapose|corroborate|substantiate|encapsulate|necessitates|presupposes|encompasses|constitutes|problematizes|synthesizes|hitherto|notwithstanding|inasmuch|insofar|therein|wherein|whereby|heretofore|the aforementioned|literature review|systematic(ally)? compar|ethical (framework|landscape|terrain|vacuum|guidance)|comparative analysis|policy development|research (workflow|process)|scholarly authorship|academic integrity|intellectual (labor|agency|rigor)|theoretical framework|conceptual framework)\b/gi) || []).length;
+  // DeepSeek-R1 chain-of-thought reasoning markers (unique to DeepSeek-R1 "think" mode output)
+  const deepseekReasoning = (text.match(/\b(let me (think|reason|work through|consider|analyze|break this down)|thinking through|reasoning through|working through|let's (think|reason|work through|break this down|consider)|upon (reflection|consideration|analysis|review)|after (careful|thorough) (consideration|analysis|review|reflection)|reconsidering|re-examining)\b/gi) || []).length;
 
   // ── Score each family ────────────────────────────────────────────────────
-  const gpt4Score    = gpt4Dashes * 2 + gpt4Vocab * 3 + gpt4Structure * 2 + gpt4ListIntro * 3 + gpt4Meta * 4;
-  const claudeScore  = claudeMarkers * 4;
-  const llamaScore   = (llamaRate > 0.05 ? Math.min(16, Math.round(llamaRate * 180)) : 0) + llamaFrameMarkers * 2;
-  const geminiScore  = geminiHedgePhrases * 3 + geminiBasedOn * 4 + geminiClosings * 3 + geminiFraming * 3 + geminiChoiceFrame * 2 + geminiMarkdown * 2 + geminiTricolon * 2;
-  const mistralScore = mistralConcise * 3 + mistralNotes * 4 + mistralDirect * 2;
-  const deepseekScore = deepseekFormal * 4 + deepseekSteps * 3 + deepseekHedge * 3 + deepseekAcademic * 4;
+  const gpt4Score    = gpt4Dashes * 2 + gpt4Vocab * 3 + gpt4Structure * 2 + gpt4ListIntro * 3 + gpt4Meta * 4 + gpt4Hedged * 2;
+  const claudeScore  = claudeMarkers * 4 + claudeEpistemic * 2 + claudeQualify * 2;
+  const llamaScore   = (llamaRate > 0.05 ? Math.min(16, Math.round(llamaRate * 180)) : 0) + llamaFrameMarkers * 2 + llamaClosings * 4 + llamaOverExplain * 2;
+  const geminiScore  = geminiHedgePhrases * 3 + geminiBasedOn * 4 + geminiClosings * 3 + geminiFraming * 3 + geminiChoiceFrame * 2 + geminiMarkdown * 2 + geminiHeres * 3 + geminiTricolon * 2;
+  const perplexityScore = perplexityCitation * 4 + perplexityRanked * 3 + perplexitySynth * 2 + perplexityTemporal * 5 + perplexityDefinition * 3;
+  const deepseekScore = deepseekFormal * 4 + deepseekSteps * 3 + deepseekHedge * 3 + deepseekAcademic * 4 + deepseekReasoning * 4;
 
-  const rawScores = { gpt4: gpt4Score, claude: claudeScore, llama: llamaScore, gemini: geminiScore, mistral: mistralScore, deepseek: deepseekScore };
+  const rawScores = { gpt4: gpt4Score, claude: claudeScore, llama: llamaScore, gemini: geminiScore, perplexity: perplexityScore, deepseek: deepseekScore };
 
   const scores = [
     { family: "GPT-4/GPT-4o", score: gpt4Score },
     { family: "Claude",        score: claudeScore },
     { family: "Llama 3",       score: llamaScore },
     { family: "Gemini",        score: geminiScore },
-    { family: "Mistral",       score: mistralScore },
+    { family: "Perplexity AI", score: perplexityScore },
     { family: "DeepSeek",      score: deepseekScore },
   ];
 
@@ -2005,7 +2026,7 @@ function aiModelFamilyFingerprint(text: string): { score: number; suspectedFamil
   // If no clear winner, leave suspectedFamily null — "Inconclusive" is better than wrong
 
   const details = suspectedFamily
-    ? `Suspected AI family: ${suspectedFamily} (${confidence} confidence). Scores — GPT-4/GPT-4o: ${gpt4Score}, Claude: ${claudeScore}, Llama 3: ${llamaScore}, Gemini: ${geminiScore}, Mistral: ${mistralScore}, DeepSeek: ${deepseekScore}. Gap vs runner-up: ${gap}. Family fingerprinting is supplementary and should not be used as standalone evidence.`
+    ? `Suspected AI family: ${suspectedFamily} (${confidence} confidence). Scores — GPT-4/GPT-4o: ${gpt4Score}, Claude: ${claudeScore}, Llama 3: ${llamaScore}, Gemini: ${geminiScore}, Perplexity AI: ${perplexityScore}, DeepSeek: ${deepseekScore}. Gap vs runner-up: ${gap}. Family fingerprinting is supplementary and should not be used as standalone evidence.`
     : totalAISignal >= 5
       ? `AI family inconclusive — scores too close to distinguish (top: ${best.family} ${best.score}, runner-up: ${second.family} ${second.score}, gap: ${gap}). This does not indicate human authorship.`
       : `No strong AI family fingerprint detected (all family scores < 5). This does not indicate human authorship.`;
@@ -4657,7 +4678,7 @@ function runPerplexityEngine(text: string): EngineResult {
     {
       name: `AI Model Family Fingerprint${suspectedFamily ? ` — ${suspectedFamily}` : ""}`,
       // Embed rawScores as a parseable suffix so the UI can render the bar chart.
-      value: familyDetails + `\n__rawScores__:${JSON.stringify({ gpt4: familyRawScores.gpt4, claude: familyRawScores.claude, llama: familyRawScores.llama, gemini: familyRawScores.gemini, mistral: familyRawScores.mistral, deepseek: familyRawScores.deepseek })}`,
+      value: familyDetails + `\n__rawScores__:${JSON.stringify({ gpt4: familyRawScores.gpt4, claude: familyRawScores.claude, llama: familyRawScores.llama, gemini: familyRawScores.gemini, perplexity: familyRawScores.perplexity, deepseek: familyRawScores.deepseek })}`,
       strength: Math.min(100, Math.round((familyFingerprintScore / 20) * 100)),
       // FIX: Only surface as an AI signal when confidence is "low" or above (score >= 12).
       // "very low" confidence (score=6, strength=30) produced too many false Gemini labels.
@@ -8448,17 +8469,16 @@ export default function DetectorPage() {
                           const familyName = fSig.name.includes("—") ? fSig.name.split("—")[1].trim() : null;
 
                           // Parse rawScores from the value suffix
-                          let rawScores: { gpt4: number; claude: number; llama: number; gemini: number; mistral: number; deepseek: number } | null = null;
+                          let rawScores: { gpt4: number; claude: number; llama: number; gemini: number; perplexity: number; deepseek: number } | null = null;
                           const rawMatch = fSig.value.match(/__rawScores__:(\{[^}]+\})/);
                           if (rawMatch) {
                             try { rawScores = JSON.parse(rawMatch[1]); } catch {}
                           }
                           if (!rawScores) return null;
 
-                          const totalScore = rawScores.gpt4 + rawScores.claude + rawScores.llama + rawScores.gemini + rawScores.mistral + rawScores.deepseek;
+                          const totalScore = rawScores.gpt4 + rawScores.claude + rawScores.llama + rawScores.gemini + rawScores.perplexity + rawScores.deepseek;
                           const confidence = fSig.strength >= 100 ? "Moderate confidence" : fSig.strength >= 60 ? "Low confidence" : "Very low confidence";
 
-                          type FamilyKey = "gpt4" | "claude" | "llama" | "gemini" | "mistral" | "deepseek";
                           const families: Array<{
                             key: FamilyKey; label: string; subtitle: string; initials: string;
                             bg: string; barColor: string; borderColor: string; textColor: string;
@@ -8467,32 +8487,32 @@ export default function DetectorPage() {
                             {
                               key: "gpt4", label: "GPT-4 / GPT-4o", subtitle: "OpenAI", initials: "GP",
                               bg: "#e8f5e9", barColor: "#16a34a", borderColor: "#bbf7d0", textColor: "#15803d",
-                              tooltip: "Scored on: em-dash overuse, vocabulary (delve, pivotal, leverage, etc.), structural transitions (furthermore, moreover, in conclusion), list introductions (here are the top N…), and meta-phrases (Pro-Tip, Why it works).",
+                              tooltip: "Scored on: em-dash overuse (—), core vocabulary (delve, pivotal, leverage, tapestry, groundbreaking, transformative, multifaceted), structural transitions (furthermore, moreover, in conclusion, firstly/secondly/lastly), list introductions (here are the top N…), meta-phrases (Pro-Tip, Why it works, key takeaway), and hedged certainty (this highlights, this showcases, let's explore).",
                             },
                             {
                               key: "claude", label: "Claude", subtitle: "Anthropic", initials: "CL",
                               bg: "#fff7ed", barColor: "#ea580c", borderColor: "#fed7aa", textColor: "#c2410c",
-                              tooltip: "Scored on: meta-commentary phrases (nuanced, worth noting, at its core, speaks to, this underscores), hedged-reflection language (it's important to recognize, taken together, this reflects), and self-referential framing.",
+                              tooltip: "Scored on: meta-commentary phrases (nuanced, worth noting, at its core, speaks to, this underscores, grapple with), hedged-reflection language (it's important to recognize, taken together, this reflects, the tension between), epistemic humility (I'd argue, admittedly, it's complicated, it depends), and nested qualifications (that said, with that said, even if, while acknowledging).",
                             },
                             {
                               key: "gemini", label: "Gemini", subtitle: "Google DeepMind", initials: "GE",
                               bg: "#fef9c3", barColor: "#ca8a04", borderColor: "#fde68a", textColor: "#92400e",
-                              tooltip: "Scored on: recommendation framing (best bet, your primary constraint, based on current research), comparison labels (practical champion, all-rounder, anomaly specialist), closing phrases (my recommendation, all things considered), and markdown asterisk bullets.",
+                              tooltip: "Scored on: recommendation framing (best bet, your primary constraint, based on current research, ultimately depends on), comparison labels (practical champion, all-rounder, clear winner, well-rounded), closing phrases (my recommendation, all things considered, the bottom line), 'Here's a breakdown/summary' patterns, and markdown asterisk bullets.",
                             },
                             {
                               key: "llama", label: "Llama 3", subtitle: "Meta AI", initials: "LL",
                               bg: "#fdf2f8", barColor: "#a21caf", borderColor: "#f5d0fe", textColor: "#86198f",
-                              tooltip: "Scored on: high modal hedge density (may/might/could used >5% of words), frame markers (in the context of, as previously mentioned), and run-on sentence structures typical of Llama 3 outputs.",
+                              tooltip: "Scored on: high modal hedge density (may/might/could used >5% of words), frame markers (in the context of, as previously mentioned, broadly speaking), conversational closings (I hope this helps, feel free to ask, let me know if), and over-explanation patterns (this means that, this is because, to put it another way).",
                             },
                             {
-                              key: "mistral", label: "Mistral", subtitle: "Mistral AI", initials: "MI",
+                              key: "perplexity", label: "Perplexity AI", subtitle: "Perplexity AI", initials: "PX",
                               bg: "#eff6ff", barColor: "#2563eb", borderColor: "#bfdbfe", textColor: "#1d4ed8",
-                              tooltip: "Scored on: concise direct phrasing (essentially, in essence, simply put), lightweight hedges (note that, keep in mind, bear in mind), and direct reader-address constructions (let's, you can, here's how).",
+                              tooltip: "Scored on: citation-forward language (according to, as reported by, evidence suggests, data shows), ranked answer patterns (key factors, main reasons, top N), synthesizer phrases (multiple sources suggest, experts agree, taken together), temporal grounding (as of 2024, as of recently), and encyclopedic definition openers (is defined as, refers to, is characterized by).",
                             },
                             {
                               key: "deepseek", label: "DeepSeek", subtitle: "DeepSeek AI", initials: "DE",
                               bg: "#f0fdf4", barColor: "#059669", borderColor: "#a7f3d0", textColor: "#065f46",
-                              tooltip: "Scored on: formal academic Chinese-influenced English (it can be seen that, it is evident that, the aforementioned), step-by-step labeling (step one/two, firstly/secondly/finally), and academic hedging (to some extent, generally speaking, given that).",
+                              tooltip: "Scored on: formal Chinese-influenced academic English (it can be seen that, it is evident that, the aforementioned, as can be seen), step-by-step labeling (step one/two, firstly/secondly/finally, last but not least), academic hedging (to some extent, generally speaking, given that, to a large extent), high-register Latinate vocabulary (elucidate, corroborate, hitherto, notwithstanding), and DeepSeek-R1 chain-of-thought reasoning markers (let me think through, upon reflection).",
                             },
                           ];
 
@@ -8514,6 +8534,7 @@ export default function DetectorPage() {
                                   const isTop = familyName && (
                                     key === "gpt4" ? familyName.startsWith("GPT") :
                                     key === "deepseek" ? familyName === "DeepSeek" :
+                                    key === "perplexity" ? familyName === "Perplexity AI" :
                                     familyName.toLowerCase() === key
                                   );
                                   return (
