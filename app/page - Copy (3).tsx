@@ -8679,191 +8679,11 @@ export default function DetectorPage() {
                 </div>
 
                 {/* Reviewer judgment strip (only when results ready) */}
-                {combined && (() => {
-                  // ── Plain-English Judgment Basis Generator ──────────────────
-                  // Builds a concise, human-readable reason string for each verdict
-                  // option based on the live engine signals. Shown as pre-filled
-                  // placeholder text that the reviewer can accept, edit, or replace.
-                  const buildJudgmentBasis = (verdict: "AI-Generated" | "Mixed" | "Human-Written"): string => {
-                    if (!perpResult && !burstResult) return "";
-
-                    const ai = combined.avgAI;
-
-                    // Sentence-level elevation
-                    const elevatedCount = perpResult
-                      ? perpResult.sentences.filter(s => s.label === "elevated").length : 0;
-                    const totalSents = perpResult?.sentenceCount ?? 0;
-                    const elevPct = totalSents > 0 ? Math.round((elevatedCount / totalSents) * 100) : 0;
-
-                    // Burstiness — sentence rhythm
-                    const bcStr = burstResult?.evidenceStrength ?? null;
-                    const rhythmIsUniform = bcStr === "HIGH" || bcStr === "MEDIUM";
-                    const rhythmIsNatural = bcStr === "LOW";
-
-                    // Neural engine
-                    const npStr = neuralResult?.evidenceStrength ?? null;
-                    const neuralFlagged   = npStr === "HIGH" || npStr === "MEDIUM";
-                    const neuralClear     = npStr === "LOW";
-
-                    // Both heuristic engines agree
-                    const psStr = perpResult?.evidenceStrength ?? null;
-                    const bothAgreeAI     = (psStr === "HIGH" || psStr === "MEDIUM") && (bcStr === "HIGH" || bcStr === "MEDIUM");
-                    const bothAgreeClear  = (psStr === "LOW" || psStr === "INCONCLUSIVE") && (bcStr === "LOW" || bcStr === "INCONCLUSIVE");
-
-                    // Suspected AI model family
-                    const familySig = perpResult?.signals.find(s => s.name.startsWith("AI Model Family Fingerprint") && s.strength >= 40);
-                    const suspectedModel = familySig?.name.includes("—")
-                      ? familySig.name.split("—")[1].trim()
-                      : null;
-
-                    // Readable AI signal descriptions — map technical names to plain English
-                    const signalPlainNames: Record<string, string> = {
-                      "AI Vocabulary Density":           "frequent use of AI-typical words and phrases",
-                      "Transition Phrase Clustering":    "overuse of filler transition phrases like 'furthermore' and 'moreover'",
-                      "Discourse Schema Uniformity":     "a predictable, formulaic essay structure",
-                      "Tone Flatness":                   "an unusually flat, emotionless tone throughout",
-                      "Self-Similarity / Idea Repetition": "ideas repeated across paragraphs with little variation",
-                      "Semantic Density Uniformity":     "every paragraph carrying roughly the same amount of information",
-                      "Paragraph Opener Uniformity":     "paragraphs that start in the same way throughout",
-                      "Conclusion Clustering":           "a conclusion section that closely mirrors the introduction",
-                      "Clause Stacking":                 "sentences packed with multiple clauses in the same way AI models build them",
-                      "Hedging Phrase Overuse":          "excessive use of cautious phrases like 'it is important to note'",
-                      "Passive Voice Overuse":           "heavy use of passive voice, which AI models favor",
-                      "Nominalization Overuse":          "turning verbs into nouns in the way AI writing tends to do",
-                      "Hapax Legomena Deficit":          "a narrow vocabulary — fewer unique word choices than typical human writing",
-                      "Function Word Profile Deviation": "unusual distribution of small grammatical words like 'the', 'of', 'and'",
-                      "Self-BLEU N-gram Repetition":     "the same word combinations repeated across different sentences",
-                      "Paraphrase Attack Pattern":       "signs that AI text may have been lightly paraphrased to avoid detection",
-                      "Capitalization Abuse":            "unusual capitalization patterns common in AI output",
-                      "Short Sentence Absence":          "an absence of short, punchy sentences — AI writing tends to stay mid-length",
-                      "Contraction Usage":               "natural use of contractions like 'don't' and 'it's'",
-                      "Personal Anecdote / Grounding":   "personal references or real-world grounding that AI rarely produces",
-                      "Numeric Specificity":             "precise numbers and specific details that suggest firsthand knowledge",
-                      "Rhetorical Variation":            "varied rhetorical styles within the same text",
-                    };
-
-                    const getPlainName = (rawName: string) => {
-                      const key = Object.keys(signalPlainNames).find(k => rawName.startsWith(k));
-                      return key ? signalPlainNames[key] : rawName.replace(/\s*\(.*?\)\s*/g, "").trim().toLowerCase();
-                    };
-
-                    const topAISigs = perpResult
-                      ? perpResult.signals
-                          .filter(s => s.pointsToAI && s.strength >= 40)
-                          .sort((a, b) => b.strength - a.strength)
-                          .slice(0, 3)
-                          .map(s => getPlainName(s.name))
-                      : [];
-
-                    const topHumanSigs = perpResult
-                      ? perpResult.signals
-                          .filter(s => !s.pointsToAI && s.strength >= 35)
-                          .sort((a, b) => b.strength - a.strength)
-                          .slice(0, 2)
-                          .map(s => getPlainName(s.name))
-                      : [];
-
-                    // ── Build verdict-specific plain English ─────────────────
-                    if (verdict === "AI-Generated") {
-                      const parts: string[] = [];
-
-                      // Opening: how strong is the score
-                      if (ai >= 80)       parts.push(`The automated analysis is highly confident this text was AI-generated, with a combined score of ${ai}%.`);
-                      else if (ai >= 65)  parts.push(`The automated analysis strongly suggests this text was AI-generated, with a combined score of ${ai}%.`);
-                      else                parts.push(`The automated analysis flags this text as likely AI-generated, with a combined score of ${ai}%.`);
-
-                      // What triggered it
-                      if (topAISigs.length > 0) {
-                        if (topAISigs.length === 1)
-                          parts.push(`The main reason is ${topAISigs[0]}.`);
-                        else if (topAISigs.length === 2)
-                          parts.push(`The main reasons are ${topAISigs[0]}, and ${topAISigs[1]}.`);
-                        else
-                          parts.push(`The main reasons are ${topAISigs[0]}, ${topAISigs[1]}, and ${topAISigs[2]}.`);
-                      }
-
-                      // Sentence spread
-                      if (elevPct >= 60)       parts.push(`Most sentences (${elevPct}%) showed AI-associated patterns, suggesting the whole text was likely generated.`);
-                      else if (elevPct >= 35)  parts.push(`A significant portion of sentences (${elevPct}%) showed AI-associated patterns.`);
-                      else if (elevPct >= 15)  parts.push(`Some sentences (${elevPct}%) showed AI-associated patterns.`);
-
-                      // Sentence rhythm
-                      if (rhythmIsUniform) parts.push("The sentences are unusually consistent in length and rhythm, which is typical of AI writing.");
-
-                      // Both engines agree
-                      if (bothAgreeAI) parts.push("Both independent analysis methods agree, which increases confidence in this result.");
-
-                      // Neural engine
-                      if (neuralFlagged) parts.push("A third, AI-based analysis also independently flagged this text.");
-
-                      // Suspected model
-                      if (suspectedModel) parts.push(`The writing style is most consistent with ${suspectedModel}.`);
-
-                      return parts.join(" ");
-                    }
-
-                    if (verdict === "Mixed") {
-                      const parts: string[] = [];
-
-                      parts.push(`The automated analysis returned a score of ${ai}%, which falls in the uncertain middle range — not clearly AI-generated, but not clearly human either.`);
-
-                      if (topAISigs.length > 0 && topHumanSigs.length > 0) {
-                        parts.push(`On one hand, there are signs that suggest AI involvement: ${topAISigs[0]}${topAISigs[1] ? ` and ${topAISigs[1]}` : ""}. On the other hand, there are also signs of human authorship: ${topHumanSigs[0]}${topHumanSigs[1] ? ` and ${topHumanSigs[1]}` : ""}.`);
-                      } else if (topAISigs.length > 0) {
-                        parts.push(`There are some signs of AI involvement — ${topAISigs[0]}${topAISigs[1] ? ` and ${topAISigs[1]}` : ""} — but not enough for a clear verdict.`);
-                      } else if (topHumanSigs.length > 0) {
-                        parts.push(`There are signs of human authorship — ${topHumanSigs[0]}${topHumanSigs[1] ? ` and ${topHumanSigs[1]}` : ""} — but a few AI-associated patterns remain.`);
-                      }
-
-                      if (elevPct > 0 && elevPct < 50) parts.push(`Only ${elevPct}% of sentences were flagged — the AI-like patterns are not consistent throughout the whole text, which may point to partial AI assistance or heavy editing.`);
-
-                      if (!bothAgreeAI && !bothAgreeClear) parts.push("The two main analysis methods gave different results, which is why no clear verdict could be reached.");
-
-                      if (neuralFlagged) parts.push("A third analysis method did flag some AI-like patterns.");
-                      else if (neuralClear) parts.push("A third analysis method found no strong AI patterns.");
-
-                      parts.push("This text may have been written with AI assistance, or it may be human writing that happens to share some stylistic features with AI output. Human judgment is recommended.");
-
-                      return parts.join(" ");
-                    }
-
-                    // Human-Written
-                    {
-                      const parts: string[] = [];
-
-                      if (ai <= 10)       parts.push(`The automated analysis is confident this text was written by a human, with a very low score of ${ai}%.`);
-                      else if (ai <= 20)  parts.push(`The automated analysis found very few AI-associated patterns, returning a low score of ${ai}%.`);
-                      else                parts.push(`The automated analysis returned a score of ${ai}%, which falls below the threshold for flagging AI-generated content.`);
-
-                      if (topHumanSigs.length > 0) {
-                        if (topHumanSigs.length === 1)
-                          parts.push(`A key indicator of human authorship was ${topHumanSigs[0]}.`);
-                        else
-                          parts.push(`Key indicators of human authorship include ${topHumanSigs[0]} and ${topHumanSigs[1]}.`);
-                      }
-
-                      if (topAISigs.length > 0) {
-                        parts.push(`While the text does contain ${topAISigs[0]}, this is common in formal academic writing and is not enough on its own to suggest AI generation.`);
-                      } else {
-                        parts.push("No significant AI-associated writing patterns were detected.");
-                      }
-
-                      if (rhythmIsNatural) parts.push("The sentence lengths vary naturally, as expected in human writing.");
-                      if (bothAgreeClear)  parts.push("Both independent analysis methods agree that AI patterns are absent.");
-                      if (neuralClear)     parts.push("A third, AI-based analysis also found no indicators of AI generation.");
-
-                      return parts.join(" ");
-                    }
-                  };
-
-                  return (
+                {combined && (
                   <div className="border-t border-slate-100 px-6 py-4 bg-slate-50/50">
-                    <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 mb-2.5">
-                      Reviewer Judgment <span className="normal-case font-normal text-slate-400">(optional — recorded in PDF report)</span>
-                    </p>
-                    <div className="flex flex-col gap-3">
-                      {/* Verdict buttons */}
-                      <div className="flex gap-2 flex-wrap">
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 mb-2.5">Reviewer Judgment <span className="normal-case font-normal text-slate-400">(optional — recorded in PDF report)</span></p>
+                    <div className="flex flex-col sm:flex-row gap-3">
+                      <div className="flex gap-2">
                         {([
                           { val: "AI-Generated"  as const, color: "#dc2626", bg: "#fef2f2", border: "#fecaca" },
                           { val: "Mixed"         as const, color: "#d97706", bg: "#fffbeb", border: "#fde68a" },
@@ -8872,12 +8692,10 @@ export default function DetectorPage() {
                           <button key={val} onClick={() => {
                             const newVal = judgment === val ? "" : val;
                             setJudgment(newVal);
-                            // Pre-fill judgeNotes with the basis if notes are currently empty
-                            if (newVal && !judgeNotes.trim()) {
-                              setJudgeNotes(buildJudgmentBasis(newVal));
-                            }
+                            // Enhancement #1: record reviewer feedback for local calibration
                             if (newVal && combined) {
                               recordReviewerFeedback(combined.tier.label, newVal, combined.avgAI);
+                              // Also update the most recent history record with the reviewer verdict
                               const h = loadHistory();
                               if (h.length > 0) { h[0].reviewerVerdict = newVal; saveHistory(h); setHistory(h); }
                             }
@@ -8892,46 +8710,17 @@ export default function DetectorPage() {
                           </button>
                         ))}
                       </div>
-
-                      {/* Basis preview cards — shown when no judgment selected yet */}
-                      {!judgment && (
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                          {([
-                            { val: "AI-Generated"  as const, color: "#dc2626", bg: "#fef2f2", border: "#fecaca", label: "If AI-Generated" },
-                            { val: "Mixed"         as const, color: "#d97706", bg: "#fffbeb", border: "#fde68a", label: "If Mixed" },
-                            { val: "Human-Written" as const, color: "#16a34a", bg: "#f0fdf4", border: "#bbf7d0", label: "If Human-Written" },
-                          ]).map(({ val, color, bg, border, label }) => (
-                            <div key={val} className="rounded-xl border px-3 py-2.5" style={{ background: bg, borderColor: border }}>
-                              <p className="text-[10px] font-bold mb-1" style={{ color }}>{label}</p>
-                              <p className="text-[10px] leading-relaxed text-slate-600">{buildJudgmentBasis(val)}</p>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-
-                      {/* Notes textarea — pre-filled with basis on verdict selection */}
                       <textarea
                         value={judgeNotes}
                         onChange={e => setJudgeNotes(e.target.value)}
-                        placeholder={judgment
-                          ? "Reason pre-filled from signals above — edit as needed…"
-                          : "Select a verdict above to auto-fill a reason, or type your own notes…"}
-                        rows={judgment ? 3 : 1}
+                        placeholder="Add reviewer notes…"
+                        rows={1}
                         aria-label="Reviewer notes"
                         className="flex-1 resize-none bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 transition leading-relaxed"
                       />
-                      {judgment && judgeNotes.trim() && (
-                        <button
-                          onClick={() => setJudgeNotes(buildJudgmentBasis(judgment as "AI-Generated" | "Mixed" | "Human-Written"))}
-                          className="self-start text-[10px] text-slate-400 hover:text-slate-600 underline underline-offset-2 transition-colors"
-                        >
-                          ↺ Reset to auto-generated reason
-                        </button>
-                      )}
                     </div>
                   </div>
-                  );
-                })()}
+                )}
               </div>
             )}
 
