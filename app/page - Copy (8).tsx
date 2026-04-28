@@ -6982,31 +6982,54 @@ function RadarChartFingerprint({ perpResult, burstResult, neuralResult }: {
             <circle key={i} cx={p.x.toFixed(1)} cy={p.y.toFixed(1)} r="4" fill={dims[i].color} stroke="white" strokeWidth="1.5" />
           ))}
 
-          {/* Axis labels */}
+          {/* Axis labels + percentage inline next to each label */}
           {dims.map((d, i) => {
             const labelR = R + 18;
             const p = getPoint(i, labelR);
-            const anchor = p.x < CX - 10 ? "end" : p.x > CX + 10 ? "start" : "middle";
-            return (
-              <text key={i} x={p.x.toFixed(1)} y={p.y.toFixed(1)}
-                textAnchor={anchor} dominantBaseline="middle"
-                fontSize="9" fontWeight="700" fill={dims[i].color}
-                fontFamily="system-ui, sans-serif">
-                {d.label}
-              </text>
-            );
-          })}
+            const isLeft  = p.x < CX - 10;
+            const isRight = p.x > CX + 10;
+            const anchor  = isLeft ? "end" : isRight ? "start" : "middle";
+            const topAxis = p.y < CY;
 
-          {/* Percentage labels on each axis */}
-          {dims.map((d, i) => {
-            const p = getPoint(i, (d.score / 100) * R);
-            if (d.score < 15) return null;
+            if (!isLeft && !isRight) {
+              // top or bottom axis: stack label + pct vertically
+              const lineH = 11;
+              return (
+                <g key={i}>
+                  <text x={p.x.toFixed(1)} y={(p.y + (topAxis ? -lineH * 0.6 : lineH * 0.1)).toFixed(1)}
+                    textAnchor="middle" dominantBaseline="middle"
+                    fontSize="9" fontWeight="700" fill={dims[i].color}
+                    fontFamily="system-ui, sans-serif">
+                    {d.label}
+                  </text>
+                  <text x={p.x.toFixed(1)} y={(p.y + (topAxis ? lineH * 0.5 : lineH * 1.2)).toFixed(1)}
+                    textAnchor="middle" dominantBaseline="middle"
+                    fontSize="8" fontWeight="900" fill={dims[i].color}
+                    fontFamily="system-ui, sans-serif" opacity="0.9">
+                    {d.score}%
+                  </text>
+                </g>
+              );
+            }
+
+            // Left or right axis: label on one line, pct just below on same side
             return (
-              <text key={`pct-${i}`} x={p.x.toFixed(1)} y={(p.y - 7).toFixed(1)}
-                textAnchor="middle" fontSize="7" fontWeight="700" fill={dims[i].color}
-                fontFamily="system-ui, sans-serif">
-                {d.score}%
-              </text>
+              <g key={i}>
+                <text x={p.x.toFixed(1)} y={p.y.toFixed(1)}
+                  textAnchor={anchor} dominantBaseline="middle"
+                  fontSize="9" fontWeight="700" fill={dims[i].color}
+                  fontFamily="system-ui, sans-serif">
+                  {d.label}
+                </text>
+                <text
+                  x={p.x.toFixed(1)}
+                  y={(p.y + 10).toFixed(1)}
+                  textAnchor={anchor} dominantBaseline="middle"
+                  fontSize="8" fontWeight="900" fill={dims[i].color}
+                  fontFamily="system-ui, sans-serif" opacity="0.9">
+                  {d.score}%
+                </text>
+              </g>
             );
           })}
 
