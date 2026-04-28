@@ -2,31 +2,6 @@
 
 import { useState, useCallback, useRef, useEffect } from "react";
 
-// ═══════════════════════════════════════════════════════════════════════════════
-//  OPTIMIZED BUILD — Applied 2026-04-29
-//  Optimizations applied vs. original page.tsx:
-//
-//  PERFORMANCE:
-//  [P1]  normaliseHomoglyphs: split/map/join → single regex pass (5× faster)
-//  [P2]  computeMTLD: new Set per factor → clear() reuse (lower GC pressure)
-//  [P3]  capitalizationAbuseScore: O(n²) text.includes → O(n) Set lookup (15× faster)
-//  [P5]  LiveHighlightedText: _computeHighlightParts extracted for reuse
-//  [P7]  keyboard useEffect: missing [] fixed with stable refs (eliminates listener leak)
-//  [P8]  SEMANTIC_CLUSTERS: regexes pre-compiled at module level
-//  [P10] extractTextFromPDF: sequential await → Promise.all (~8× faster on long PDFs)
-//
-//  ACCURACY:
-//  [A2]  hapaxLegomenaScore: stop words excluded from frequency map
-//  [A6]  ideaRepetitionScore: 30-char prefix → 60-char with length guard
-//  [A8]  detectDomain: phrase-level regex added for hyphenated academic terms
-//  [A9]  computeESLScorePenalty: confidence-scaled (not flat) penalty
-//
-//  ROBUSTNESS:
-//  [R1]  detectEvasionAttempts: BiDi override, ZWJ injection, token-splitting, punctuation lookalike
-//  [R2]  sanitiseInput: BiDi strip, spaced-letter collapse, smart-quote normalization
-//  [R3]  stripInvisibleCharacters: variation selectors, tag block, Unicode space separators
-// ═══════════════════════════════════════════════════════════════════════════════
-
 // ─────────────────────────────────────────────────────────────────────────────
 //  PDF REPORT GENERATOR  (client-side via jsPDF, dynamically loaded)
 //  No npm install needed - loaded from cdnjs at download time.
@@ -40,17 +15,12 @@ import { useState, useCallback, useRef, useEffect } from "react";
 // ─────────────────────────────────────────────────────────────────────────────
 
 function stripInvisibleCharacters(text: string): string {
-  // OPT ROBUST: Expanded strip list:
-  // - Original: soft hyphen, ZW-space/non-joiner/joiner/LRM/RLM, word joiner,
-  //   function application, invisible plus/times, BOM, NBSP
-  // - Added: interlinear annotation chars, object replacement char, ideographic space,
-  //   variation selectors (used for steganographic evasion), tag characters (U+E0000 block)
-  return text
-    .replace(/[\u00AD\u200B\u200C\u200D\u200E\u200F\u2060\u2061\u2062\u2063\uFEFF\u00A0]/g, "")
-    .replace(/[\u2028\u2029\u202F\u205F\u3000]/g, " ")  // line/paragraph separators → space
-    .replace(/[\uFFF9\uFFFA\uFFFB\uFFFC]/g, "")           // interlinear annotation / object replacement
-    .replace(/[\uFE00-\uFE0F]/g, "")                        // variation selectors (steganographic evasion)
-    .replace(/[\u{E0000}-\u{E007F}]/gu, "");                // Unicode tag block (invisible ASCII lookalikes)
+  // Strips: soft hyphen, zero-width space/non-joiner/joiner/LRM/RLM,
+  // word joiner, function application, invisible plus/times, BOM, NBSP
+  return text.replace(
+    /[\u00AD\u200B\u200C\u200D\u200E\u200F\u2060\u2061\u2062\u2063\uFEFF\u00A0]/g,
+    ""
+  );
 }
 
 const HOMOGLYPH_MAP: Record<string, string> = {
@@ -69,14 +39,8 @@ const HOMOGLYPH_MAP: Record<string, string> = {
   "\uFF5A": "z",
 };
 
-// ── OPT P1: Build regex from homoglyph keys ONCE at module level ──────────
-// Replaces split("").map().join() (3 allocations) with a single regex pass.
-// Escape regex metacharacters in the character class.
-const _HOMOGLYPH_CHARS = Object.keys(HOMOGLYPH_MAP).join("").replace(/[-\]^\\]/g, "\\$&");
-const _HOMOGLYPH_RE = new RegExp(`[${_HOMOGLYPH_CHARS}]`, "g");
-
 function normaliseHomoglyphs(text: string): string {
-  return text.replace(_HOMOGLYPH_RE, (c) => HOMOGLYPH_MAP[c] ?? c);
+  return text.split("").map(c => HOMOGLYPH_MAP[c] ?? c).join("");
 }
 
 // ── Enhancement #8: Whitespace-injection & Unicode-period evasion detection ──
@@ -92,30 +56,13 @@ function detectEvasionAttempts(text: string): { detected: boolean; types: string
   if (/\[AI:|\[HUMAN:|<ai>|<human>/i.test(text)) types.push("bracket-tagging");
   // Repetitive punctuation padding
   if (/[.]{4,}|[,]{3,}/.test(text)) types.push("punctuation-padding");
-  // OPT ROBUST: BiDi override characters (can visually hide AI phrases inside text)
-  if (/[\u202A-\u202E\u2066-\u2069]/.test(text)) types.push("bidi-override");
-  // OPT ROBUST: Zero-width joiner abuse (beyond invisible strip -- more than 3 is anomalous)
-  if ((text.match(/\u200D/g) || []).length > 3) types.push("zwj-injection");
-  // OPT ROBUST: Spaced-letter token splitting ("f u r t h e r m o r e")
-  if (/\b([a-z] ){4,}[a-z]\b/i.test(text)) types.push("token-splitting");
-  // OPT ROBUST: Lookalike apostrophes / punctuation substitution
-  if (/[\u02BC\u055A\uFF07\uFF0C\uFF1A\uFF1B]/.test(text)) types.push("punctuation-lookalike");
   return { detected: types.length > 0, types };
 }
 
 function sanitiseInput(text: string): string {
   let sanitised = normaliseHomoglyphs(stripInvisibleCharacters(text));
-  // OPT ROBUST: Strip BiDi override characters (visually hide content)
-  sanitised = sanitised.replace(/[\u202A-\u202E\u2066-\u2069]/g, "");
-  // OPT ROBUST: Collapse spaced-letter token splitting ("f u r t h e r" → "further")
-  sanitised = sanitised.replace(/\b(([a-z]) ){4,}([a-z])\b/gi, (m) => m.replace(/ /g, ""));
   // Normalize Unicode periods to ASCII
   sanitised = sanitised.replace(/\uFF0E/g, ".");
-  // OPT ROBUST: Normalize typographic quotes and Unicode ellipsis
-  sanitised = sanitised
-    .replace(/[\u2018\u2019]/g, "'")
-    .replace(/[\u201C\u201D]/g, '"')
-    .replace(/\u2026/g, "...");
   // Collapse whitespace injection (multiple spaces within text lines, not paragraph breaks)
   sanitised = sanitised.replace(/([^\n]) {2,}([^\n])/g, (_, a, b) => `${a} ${b}`);
   // Improvement #16: Strip citation/bibliography blocks before analysis
@@ -160,20 +107,18 @@ async function extractTextFromPDF(file: File): Promise<string> {
   const pdfjsLib = await loadPdfJs();
   const arrayBuffer = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-  // OPT P10: Fetch all pages concurrently — O(max_page_latency) vs O(sum_page_latency).
-  // For a 50-page PDF this cuts extraction time by ~8x vs sequential await.
-  const pageTexts = await Promise.all(
-    Array.from({ length: pdf.numPages }, async (_, idx) => {
-      const page = await pdf.getPage(idx + 1);
-      const content = await page.getTextContent();
-      return content.items
-        .map((item: any) => ("str" in item ? item.str : ""))
-        .join(" ")
-        .replace(/\s+/g, " ")
-        .trim();
-    })
-  );
-  return pageTexts.filter(Boolean).join("\n\n");
+  const texts: string[] = [];
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    const pageText = content.items
+      .map((item: any) => ("str" in item ? item.str : ""))
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (pageText) texts.push(pageText);
+  }
+  return texts.join("\n\n");
 }
 
 async function generatePDFReport(
@@ -1690,13 +1635,7 @@ function ideaRepetitionScore(text: string, sentences: string[]): { score: number
   let totalPairs = 0;
   for (const para of paragraphs) {
     // Find sentences belonging to this paragraph
-    // OPT A6/P9: Match sentences to paragraphs by checking if the sentence (up to 60 chars)
-    // appears within the paragraph. Using 60 chars reduces false positive prefix collisions
-    // that occurred with 30-char prefixes when sentences start identically.
-    const paraSents = sentences.filter(s => {
-      const key = s.trim().slice(0, 60);
-      return key.length > 10 && para.includes(key);
-    });
+    const paraSents = sentences.filter(s => para.includes(s.trim().slice(0, 30)));
     if (paraSents.length < 2) continue;
     const sets = paraSents.map(contentWords);
     const { repetitivePairs } = computeRepetitionFromSets(sets, paraSents.length);
@@ -1750,13 +1689,10 @@ function computeRepetitionFromSets(sets: Set<string>[], count: number): { score:
 function hapaxLegomenaScore(words: string[]): { score: number; hapaxRatio: number; details: string } {
   const wc = Math.max(words.length, 1);
   if (wc < 80) return { score: 0, hapaxRatio: 0, details: "Insufficient words for hapax analysis." };
-  // OPT A2: Exclude stop words from hapax frequency map.
-  // Including stop words inflates hapax ratio on short texts (common stop words rarely repeat)
-  // and makes the signal unreliable. Minimum length raised to 4 for the same reason.
   const freq: Record<string, number> = {};
   for (const w of words) {
     const lw = w.toLowerCase().replace(/[^a-z]/g, "");
-    if (lw.length >= 4 && !STOP_WORDS.has(lw)) freq[lw] = (freq[lw] || 0) + 1;
+    if (lw.length >= 3) freq[lw] = (freq[lw] || 0) + 1;
   }
   const totalUniq = Object.keys(freq).length;
   const hapaxCount = Object.values(freq).filter(c => c === 1).length;
@@ -1920,10 +1856,8 @@ function quoteDetectorScore(text: string, wc: number): { humanReduction: number;
 // ─────────────────────────────────────────────────────────────────────────────
 
 function capitalizationAbuseScore(text: string): { score: number; abuseCount: number; details: string } {
-  // OPT P3: Pre-build a Set of all lowercased words once — O(n) lookup vs O(n^2) text.includes().
-  // For a 500-sentence document this reduces ~10,000 full-string scans to O(1) Set lookups.
-  const lowerWordSet = new Set(text.toLowerCase().match(/\b[a-z]{4,}\b/g) ?? []);
-
+  // Find mid-sentence capitalized words that aren't: proper nouns (preceded by their name),
+  // acronyms (all-caps), start of sentence, or known proper terms
   const sentences = text.split(/[.!?]+/).filter(s => s.trim().length > 20);
   let abuseCount = 0;
   const examples: string[] = [];
@@ -1938,10 +1872,9 @@ function capitalizationAbuseScore(text: string): { score: number; abuseCount: nu
       if (w === w.toUpperCase()) continue;
       // Mid-sentence capital: starts with uppercase, not all-caps
       if (/^[A-Z][a-z]/.test(w)) {
-        // OPT P3: O(1) Set lookup instead of O(n) text.includes scan
-        // Also catches word before punctuation — more accurate than space-delimited search
+        // Not a proper noun heuristic: if the same word appears lowercase elsewhere, it's likely abuse
         const lw = w.toLowerCase();
-        const appearsLower = lowerWordSet.has(lw);
+        const appearsLower = text.includes(" " + lw + " ") || text.includes(" " + lw + ",");
         if (appearsLower) {
           abuseCount++;
           if (examples.length < 3) examples.push(`"${words.slice(Math.max(0, i-1), i+2).join(" ")}"`);
@@ -3075,25 +3008,12 @@ function getReliabilityWarnings(text: string, wc: number, sentences: string[]): 
 //  dropping to 11.6% after text perplexity was adjusted for non-native patterns.
 //  Returns 0 (no penalty) to 15 (strong ESL signal = subtract 15 from norm score).
 // ─────────────────────────────────────────────────────────────────────────────
-function computeESLScorePenalty(warnings: string[], rawScore = 50, strength: EvidenceStrength = "INCONCLUSIVE"): number {
-  // OPT A9: Scale ESL penalty by confidence level.
-  // A flat -15 on HIGH-confidence AI text (score=85) was doing almost nothing (70 still = AI zone),
-  // while the same -15 on INCONCLUSIVE text (score=40) unfairly pushed it into the human zone.
-  // Fix: full penalty for weak evidence (protects humans), reduced penalty for strong AI evidence
-  // (doesn't mask genuine AI signals on ESL text).
-  const hasPhilippine = warnings.some(w => w.includes("Philippine") || w.includes("Filipino"));
+function computeESLScorePenalty(warnings: string[]): number {
   const hasESL = warnings.some(w => w.includes("ESL") || w.includes("formal-register"));
-  const base = hasPhilippine ? 15 : hasESL ? 10 : 0;
-  if (base === 0) return 0;
-
-  // Scale: strong HIGH-confidence AI result → reduce penalty so genuine AI in ESL isn't hidden
-  const scaleFactor =
-    strength === "HIGH" && rawScore > 70 ? 0.4
-    : strength === "HIGH" ? 0.6
-    : strength === "MEDIUM" ? 0.8
-    : 1.0; // LOW / INCONCLUSIVE → full penalty (protect human writers)
-
-  return Math.round(base * scaleFactor);
+  const hasPhilippine = warnings.some(w => w.includes("Philippine") || w.includes("Filipino"));
+  if (hasPhilippine) return 15; // stronger penalty for Philippine context (primary use case)
+  if (hasESL) return 10;
+  return 0;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -3154,13 +3074,7 @@ function detectDomain(text: string, words: string[]): DomainProfile {
   const lower = text.toLowerCase();
 
   // Academic signal: research terminology density
-  // OPT A8: Add phrase-level matching for hyphenated compound terms that word-level
-  // tokenization (/\b[a-z]+\b/) can never match (e.g. "meta-analysis", "p-value").
-  // These were silently missed before, reducing academic domain sensitivity by 8-12pp.
-  const ACADEMIC_PHRASE_RE = /\b(meta-analysis|p-value|effect size|sample size|literature review|theoretical framework|randomized controlled|double-blind|control group|informed consent|ethics committee|systematic review|grounded theory|research design|conceptual framework|effect size|evidence base|chi-square)\b/gi;
-  const academicWordHits = words.filter(w => ACADEMIC_TERMS.has(w)).length;
-  const academicPhraseHits = (text.match(ACADEMIC_PHRASE_RE) || []).length;
-  const academicHits = academicWordHits + academicPhraseHits * 2; // weight compound terms higher
+  const academicHits = words.filter(w => ACADEMIC_TERMS.has(w)).length;
   const academicRate = academicHits / wc;
 
   // Legal signal: legal boilerplate density
@@ -3322,26 +3236,29 @@ function computeWarningPenalty(warnings: string[], engineType: "stylometry" | "b
 
 function computeMTLD(words: string[], threshold = 0.72): number {
   if (words.length < 30) return 100; // too short — return high (human-like) value
-  // OPT P2: Reuse one Set per pass (clear() is cheaper than new Set()).
-  // The original allocated a new Set on every factor boundary; now we clear and reuse.
   let totalFactors = 0;
+  let start = 0;
   const uniqueInRun = new Set<string>();
   let runLen = 0;
   for (let i = 0; i < words.length; i++) {
     uniqueInRun.add(words[i]);
     runLen++;
-    if (uniqueInRun.size / runLen < threshold) {
+    const ttr = uniqueInRun.size / runLen;
+    if (ttr < threshold) {
       totalFactors++;
-      uniqueInRun.clear(); // OPT P2: reuse Set — avoids GC pressure
+      uniqueInRun.clear();
       runLen = 0;
+      start = i + 1;
     }
   }
   // Partial factor for the remainder
   if (runLen > 0) {
     const partialTTR = uniqueInRun.size / runLen;
-    totalFactors += (1 - partialTTR) / (1 - threshold);
+    const partialFactor = (1 - partialTTR) / (1 - threshold);
+    totalFactors += partialFactor;
   }
-  return totalFactors === 0 ? 100 : words.length / totalFactors;
+  if (totalFactors === 0) return 100;
+  return words.length / totalFactors;
 }
 
 function mtldScore(text: string, wc: number): { score: number; mtld: number; details: string } {
@@ -3382,23 +3299,14 @@ const SEMANTIC_CLUSTERS: Array<{ concept: string; terms: RegExp }> = [
   { concept: "foundation/structure", terms: /\b(foundation|cornerstone|backbone|pillar|bedrock|framework|scaffold|structure|basis|core|underpinning|linchpin)\b/gi },
 ];
 
-// OPT P8: Pre-compile semantic cluster regexes ONCE at module level.
-// Without this, new RegExp(cluster.terms.source, "gi") is called inside the scoring
-// function on every analysis run, wasting ~6 regex compilations per call.
-const SEMANTIC_CLUSTERS_COMPILED: Array<{ concept: string; re: RegExp }> =
-  SEMANTIC_CLUSTERS.map(c => ({ concept: c.concept, re: new RegExp(c.terms.source, "gi") }));
-
 function semanticSelfSimilarityScore(text: string, wc: number): { score: number; clusterHits: number; details: string } {
   if (wc < 100) return { score: 0, clusterHits: 0, details: "Text too short for semantic cluster analysis." };
 
   let totalOverusedClusters = 0;
   const hitConceptsDetails: string[] = [];
 
-  // OPT P8: Use pre-compiled regexes instead of compiling on every call
-  for (const cluster of SEMANTIC_CLUSTERS_COMPILED) {
-    // Reset lastIndex since 'gi' regexes are stateful when reused
-    cluster.re.lastIndex = 0;
-    const matches = text.match(cluster.re) || [];
+  for (const cluster of SEMANTIC_CLUSTERS) {
+    const matches = text.match(new RegExp(cluster.terms.source, "gi")) || [];
     const uniqueTerms = new Set(matches.map(m => m.toLowerCase()));
     // Flag when 3+ unique synonyms from same conceptual cluster appear in one document
     if (uniqueTerms.size >= 3) {
@@ -4482,7 +4390,7 @@ function runPerplexityEngine(text: string): EngineResult {
   // Research basis: false-positive rate on TOEFL essays dropped from 61.3% → 11.6%
   // after adjusting for non-native writing patterns. This is a DIRECT score reduction
   // (not just a warning) — the previous behavior only warned without adjusting.
-  const eslScorePenalty = computeESLScorePenalty(reliabilityWarnings, Math.round(norm), strength);
+  const eslScorePenalty = computeESLScorePenalty(reliabilityWarnings);
   if (eslScorePenalty > 0) {
     norm = Math.max(0, norm - eslScorePenalty);
   }
@@ -5131,7 +5039,7 @@ function runBurstinessEngine(text: string): EngineResult {
   // ── ESL / Philippine context score calibration ────────────────────────────
   // Apply the same ESL penalty as Engine A (but burstiness is already partially
   // suppressed above via eslFlagB; this handles any residual formal-register signal).
-  const eslScorePenaltyB = computeESLScorePenalty(reliabilityWarnings, Math.round(norm), strength);
+  const eslScorePenaltyB = computeESLScorePenalty(reliabilityWarnings);
   if (eslScorePenaltyB > 0) {
     norm = Math.max(0, norm - eslScorePenaltyB * 0.6); // softer for Engine B — burstiness partly ESL-immune
   }
@@ -6131,28 +6039,18 @@ const TOOL_TABLE = [
 //  UI — LIVE AI WORD HIGHLIGHTER
 // ─────────────────────────────────────────────────────────────────────────────
 
-// OPT P5: Extract tokenisation into a pure function for caching.
-function _computeHighlightParts(text: string) {
+function LiveHighlightedText({ text }: { text: string }) {
+  if (!text.trim()) return null;
   const parts: Array<{ word: string; tier: "strong" | "medium" | "none" }> = [];
-  const tokenRe = /(\b[a-zA-Z\'-]+\b|[^a-zA-Z\'-]+)/g;
+  const tokenRe = /(\b[a-zA-Z'-]+\b|[^a-zA-Z'-]+)/g;
   let match: RegExpExecArray | null;
   while ((match = tokenRe.exec(text)) !== null) {
     const tok = match[0];
     const lower = tok.toLowerCase().replace(/[^a-z]/g, "");
-    parts.push({
-      word: tok,
-      tier: AI_VOCAB_STRONG.has(lower) ? "strong"
-           : AI_VOCAB_MEDIUM.has(lower) ? "medium"
-           : "none",
-    });
+    if (AI_VOCAB_STRONG.has(lower)) parts.push({ word: tok, tier: "strong" });
+    else if (AI_VOCAB_MEDIUM.has(lower)) parts.push({ word: tok, tier: "medium" });
+    else parts.push({ word: tok, tier: "none" });
   }
-  return parts;
-}
-
-function LiveHighlightedText({ text }: { text: string }) {
-  if (!text.trim()) return null;
-  // OPT P5: Compute highlight parts only when text changes (avoids re-tokenising on every render)
-  const parts = _computeHighlightParts(text);
   const strongCount = parts.filter(p => p.tier === "strong").length;
   const mediumCount = parts.filter(p => p.tier === "medium").length;
   return (
@@ -7864,11 +7762,17 @@ export default function DetectorPage() {
   // Load history on mount
   useEffect(() => { setHistory(loadHistory()); }, []);
 
-  // OPT P7: Stable refs for keyboard shortcut — declared here, synced after loading/inputText defined.
-  // This avoids re-registering the keydown listener on every render (original bug: no [] on useEffect).
-  const _kbLoadingRef = useRef(false);
-  const _kbInputRef = useRef("");
-  const _kbAnalyzeRef = useRef<(() => void) | null>(null);
+  // Keyboard shortcut: Ctrl/Cmd+Enter to analyze
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+        e.preventDefault();
+        if (!loading && inputText.trim().length >= 50) handleAnalyze();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  });
 
   // ─────────────────────────────────────────────────────────────────────────
   //  SOURCE-CODE PROTECTION
@@ -7926,28 +7830,6 @@ export default function DetectorPage() {
 
   const wc = inputText.trim() ? inputText.trim().split(/\s+/).length : 0;
   const loading = loadingT || loadingG || loadingN;
-
-  // OPT P7: Sync stable refs after loading/inputText/handleAnalyze are defined.
-  // The keyboard listener (registered once via [] below) reads these refs at event time.
-  useEffect(() => { _kbLoadingRef.current = loading; }, [loading]);
-  useEffect(() => { _kbInputRef.current = inputText; }, [inputText]);
-  useEffect(() => { _kbAnalyzeRef.current = handleAnalyze; });
-
-  // OPT P7: Register keyboard listener ONCE on mount ([] dependency array).
-  // Original had no [], so the listener was re-added on every single render — a memory leak.
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
-        e.preventDefault();
-        if (!_kbLoadingRef.current && _kbInputRef.current.trim().length >= 50) {
-          _kbAnalyzeRef.current?.();
-        }
-      }
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, []); // registered once — refs provide fresh values without re-subscribing
-
 
   // Derived combined score
   const getCombined = () => {
