@@ -3075,23 +3075,24 @@ function getReliabilityWarnings(text: string, wc: number, sentences: string[]): 
 //  dropping to 11.6% after text perplexity was adjusted for non-native patterns.
 //  Returns 0 (no penalty) to 15 (strong ESL signal = subtract 15 from norm score).
 // ─────────────────────────────────────────────────────────────────────────────
-function computeESLScorePenalty(warnings: string[], rawScore = 50, strength: EvidenceStrength = "INCONCLUSIVE"): number {
-  // OPT A9: Scale ESL penalty by confidence level.
-  // A flat -15 on HIGH-confidence AI text (score=85) was doing almost nothing (70 still = AI zone),
-  // while the same -15 on INCONCLUSIVE text (score=40) unfairly pushed it into the human zone.
-  // Fix: full penalty for weak evidence (protects humans), reduced penalty for strong AI evidence
-  // (doesn't mask genuine AI signals on ESL text).
+function computeESLScorePenalty(warnings: string[], rawScore = 50): number {
+  // OPT A9: Scale ESL penalty by score magnitude.
+  // A flat -15 on high-scoring AI text (score=85) still lands in AI zone,
+  // but the same flat -15 on a borderline score (score=40) unfairly pushed it to Human.
+  // Fix: derive scaling from rawScore directly (no dependency on 'strength' which is
+  // computed after this function is called, avoiding the "used before declaration" error).
   const hasPhilippine = warnings.some(w => w.includes("Philippine") || w.includes("Filipino"));
   const hasESL = warnings.some(w => w.includes("ESL") || w.includes("formal-register"));
   const base = hasPhilippine ? 15 : hasESL ? 10 : 0;
   if (base === 0) return 0;
 
-  // Scale: strong HIGH-confidence AI result → reduce penalty so genuine AI in ESL isn't hidden
+  // Scale: clear AI signal (high rawScore) → reduce penalty so genuine AI in ESL isn't masked.
+  // Borderline / low score → full penalty to protect human writers.
   const scaleFactor =
-    strength === "HIGH" && rawScore > 70 ? 0.4
-    : strength === "HIGH" ? 0.6
-    : strength === "MEDIUM" ? 0.8
-    : 1.0; // LOW / INCONCLUSIVE → full penalty (protect human writers)
+    rawScore > 70 ? 0.4
+    : rawScore > 55 ? 0.6
+    : rawScore > 35 ? 0.8
+    : 1.0;
 
   return Math.round(base * scaleFactor);
 }
@@ -4482,7 +4483,7 @@ function runPerplexityEngine(text: string): EngineResult {
   // Research basis: false-positive rate on TOEFL essays dropped from 61.3% → 11.6%
   // after adjusting for non-native writing patterns. This is a DIRECT score reduction
   // (not just a warning) — the previous behavior only warned without adjusting.
-  const eslScorePenalty = computeESLScorePenalty(reliabilityWarnings, Math.round(norm), strength);
+  const eslScorePenalty = computeESLScorePenalty(reliabilityWarnings, Math.round(norm));
   if (eslScorePenalty > 0) {
     norm = Math.max(0, norm - eslScorePenalty);
   }
@@ -5131,7 +5132,7 @@ function runBurstinessEngine(text: string): EngineResult {
   // ── ESL / Philippine context score calibration ────────────────────────────
   // Apply the same ESL penalty as Engine A (but burstiness is already partially
   // suppressed above via eslFlagB; this handles any residual formal-register signal).
-  const eslScorePenaltyB = computeESLScorePenalty(reliabilityWarnings, Math.round(norm), strength);
+  const eslScorePenaltyB = computeESLScorePenalty(reliabilityWarnings, Math.round(norm));
   if (eslScorePenaltyB > 0) {
     norm = Math.max(0, norm - eslScorePenaltyB * 0.6); // softer for Engine B — burstiness partly ESL-immune
   }
