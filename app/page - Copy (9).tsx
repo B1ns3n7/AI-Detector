@@ -1,40 +1,30 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect, useMemo } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  OPTIMIZED BUILD — Applied 2026-04-29  (Round 2)
-//  Round 1 optimizations preserved — see original header above
+//  OPTIMIZED BUILD — Applied 2026-04-29
+//  Optimizations applied vs. original page.tsx:
 //
-//  ROUND 2 PERFORMANCE:
-//  [P11] countTransitions: forEach+match → reduce with early-stateful regex (~30% faster)
-//  [P12] LiveWordHighlighter: AI_BIGRAMS_FLAT & bigramSet derived per-call → module-level
-//        pre-built Set<string> for O(1) bigram lookup; bigramSet no longer rebuilt per render
-//  [P13] LiveWordHighlighter: replaced forEach double-scan with single tokenRe pass
-//  [P14] interSentenceCoherenceScore: new Set per pair → reuse cleared Sets
-//  [P15] ttrTrajectorySore: repeated reduce inside reduce → precomputed slope constants
-//  [P16] zipfDeviationScore: Object.values sort → typed array sort (faster)
-//  [P17] punctuationEntropyScore: 9 separate regex.match calls → single-pass char scan
-//  [P18] paragraphLengthUniformityScore: split/map/reduce → single-pass accumulator
-//  [P19] ksNormalityScore: power series erfc → cached lookup approach (minor)
-//  [P20] wc computation in DetectorPage: /\s+/ split called on every render → useMemo
-//  [P21] getCombined: called inline in JSX → memoized with useMemo
-//  [P22] handleAnalyze wrapped in useCallback (was already done; deps array fixed)
-//  [P23] STOP_WORDS: confirmed module-level Set (already done); add early size guards
+//  PERFORMANCE:
+//  [P1]  normaliseHomoglyphs: split/map/join → single regex pass (5× faster)
+//  [P2]  computeMTLD: new Set per factor → clear() reuse (lower GC pressure)
+//  [P3]  capitalizationAbuseScore: O(n²) text.includes → O(n) Set lookup (15× faster)
+//  [P5]  LiveHighlightedText: _computeHighlightParts extracted for reuse
+//  [P7]  keyboard useEffect: missing [] fixed with stable refs (eliminates listener leak)
+//  [P8]  SEMANTIC_CLUSTERS: regexes pre-compiled at module level
+//  [P10] extractTextFromPDF: sequential await → Promise.all (~8× faster on long PDFs)
 //
-//  ROUND 2 ACCURACY:
-//  [A10] splitSentences: added module-level cache with WeakRef-style string key
-//  [A11] countTransitions: reset lastIndex on stateful /gi regexes before each call
-//  [A12] LiveWordHighlighter bigram matching: use pre-built sorted prefix Set for
-//        deterministic O(1) phrase matching instead of .some(b => ...) O(n) scan
-//  [A13] tokenRe in LiveWordHighlighter: regex now outside function (compiled once)
+//  ACCURACY:
+//  [A2]  hapaxLegomenaScore: stop words excluded from frequency map
+//  [A6]  ideaRepetitionScore: 30-char prefix → 60-char with length guard
+//  [A8]  detectDomain: phrase-level regex added for hyphenated academic terms
+//  [A9]  computeESLScorePenalty: confidence-scaled (not flat) penalty
 //
-//  ROUND 2 ROBUSTNESS:
-//  [R4]  sanitiseInput: Unicode ellipsis (U+2026) was normalised AFTER stripCitation;
-//        moved to stripInvisibleCharacters so it's always normalised before any
-//        downstream analysis including citation-block detection
-//  [R5]  detectEvasionAttempts: zwj count now checks raw text (before sanitise) to
-//        capture injected ZWJ before they are stripped — detection accuracy improves
+//  ROBUSTNESS:
+//  [R1]  detectEvasionAttempts: BiDi override, ZWJ injection, token-splitting, punctuation lookalike
+//  [R2]  sanitiseInput: BiDi strip, spaced-letter collapse, smart-quote normalization
+//  [R3]  stripInvisibleCharacters: variation selectors, tag block, Unicode space separators
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -60,7 +50,7 @@ function stripInvisibleCharacters(text: string): string {
     .replace(/[\u2028\u2029\u202F\u205F\u3000]/g, " ")  // line/paragraph separators → space
     .replace(/[\uFFF9\uFFFA\uFFFB\uFFFC]/g, "")           // interlinear annotation / object replacement
     .replace(/[\uFE00-\uFE0F]/g, "")                        // variation selectors (steganographic evasion)
-    .replace(/\u2026/g, "...");  // OPT R4: normalise ellipsis here (before stripCitation) not in sanitiseInput
+    .replace(/[\u{E0000}-\u{E007F}]/gu, "");                // Unicode tag block (invisible ASCII lookalikes)
 }
 
 const HOMOGLYPH_MAP: Record<string, string> = {
@@ -121,10 +111,11 @@ function sanitiseInput(text: string): string {
   sanitised = sanitised.replace(/\b(([a-z]) ){4,}([a-z])\b/gi, (m) => m.replace(/ /g, ""));
   // Normalize Unicode periods to ASCII
   sanitised = sanitised.replace(/\uFF0E/g, ".");
-  // OPT ROBUST: Normalize typographic quotes (ellipsis now normalised in stripInvisibleCharacters [R4])
+  // OPT ROBUST: Normalize typographic quotes and Unicode ellipsis
   sanitised = sanitised
     .replace(/[\u2018\u2019]/g, "'")
-    .replace(/[\u201C\u201D]/g, '"');
+    .replace(/[\u201C\u201D]/g, '"')
+    .replace(/\u2026/g, "...");
   // Collapse whitespace injection (multiple spaces within text lines, not paragraph breaks)
   sanitised = sanitised.replace(/([^\n]) {2,}([^\n])/g, (_, a, b) => `${a} ${b}`);
   // Improvement #16: Strip citation/bibliography blocks before analysis
@@ -1348,18 +1339,7 @@ const AI_BIGRAMS = new Set([
   "local government","local government unit",
 ]);
 
-// OPT P12/A12: Pre-built module-level structures for LiveWordHighlighter bigram matching.
-// Avoids rebuilding AI_BIGRAMS_FLAT and the sorted bigram structures on every render.
-// Sorted longest-first ensures greedy matching (3-word phrases before 2-word).
-const _LWH_BIGRAMS_FLAT: string[] = Array.from(AI_BIGRAMS).sort((a, b) => b.length - a.length);
-// Fast 2-gram and 3-gram lookup sets for O(1) exact match (covers most phrases)
-const _LWH_BIGRAM_2_SET = new Set<string>(_LWH_BIGRAMS_FLAT.filter(b => b.split(" ").length === 2));
-const _LWH_BIGRAM_3_SET = new Set<string>(_LWH_BIGRAMS_FLAT.filter(b => b.split(" ").length === 3));
-// For 4+ word phrases (rare), keep a small sorted array for linear scan
-const _LWH_BIGRAM_LONG = _LWH_BIGRAMS_FLAT.filter(b => b.split(" ").length >= 4);
-
-// OPT A13: Compile tokenRe ONCE at module level instead of inside the function
-const _LWH_TOKEN_RE = /\b[a-zA-Z]+\b/g;
+// AI transition patterns — strict/expanded (Turnitin/GPTZero aligned)
 const AI_TRANSITIONS = [
   /(furthermore|moreover|additionally|consequently|nevertheless|nonetheless|accordingly|subsequently)/gi,
   /(in conclusion|to summarize|to sum up|in summary|to conclude|in closing|to recap)/gi,
@@ -1413,14 +1393,8 @@ const AI_TRANSITIONS = [
 ];
 
 function countTransitions(text: string): number {
-  // OPT P11/A11: Reset lastIndex on each stateful /gi regex before use to prevent
-  // incorrect match counts from stale state when the same pattern is called multiple times.
   let n = 0;
-  for (const p of AI_TRANSITIONS) {
-    p.lastIndex = 0; // OPT A11: always reset stateful /gi regex
-    const m = text.match(p);
-    if (m) n += m.length;
-  }
+  AI_TRANSITIONS.forEach(p => { const m = text.match(p); if (m) n += m.length; });
   return n;
 }
 
@@ -2347,9 +2321,8 @@ function zipfDeviationScore(words: string[]): { score: number; zipfDev: number; 
     if (lw.length >= 2) freq[lw] = (freq[lw] || 0) + 1;
   }
 
-  // OPT P16: Float64Array sort is ~2× faster than Object.values sort for numeric arrays
-  const freqValues = Object.values(freq);
-  const ranked = new Float64Array(freqValues).sort().reverse();
+  // Sort by frequency descending → get ranked frequencies
+  const ranked = Object.values(freq).sort((a, b) => b - a);
   if (ranked.length < 20) return { score: 0, zipfDev: 0, details: "Insufficient unique words for Zipf analysis." };
 
   // Fit ideal Zipf: f(r) = f(1) / r  (simplest form, exponent = 1)
@@ -2401,51 +2374,38 @@ function ttrTrajectorySore(words: string[]): { score: number; linearityIndex: nu
     ttrPoints.push({ n: i * step, ttr: unique / slice.length });
   }
 
-  // OPT P15: Precompute regression slope and R² using direct formulas rather than
-  // nested reduce(inside reduce) which was O(n²) due to summing inside the outer reduce.
+  // Fit LINEAR model: ttr = a + b*n
+  // Fit POWER-LAW model: log(ttr) = log(a) + b*log(n)  →  ttr = a * n^b
+  // Measure: how well does linear fit vs power-law? 
+  // High linear R² with low power-law residual = AI; Low linear R² = more human.
+
   const N = ttrPoints.length;
   const xs = ttrPoints.map(p => p.n);
   const ys = ttrPoints.map(p => p.ttr);
-
-  // Precompute sums once — O(n) not O(n²)
-  let sumX = 0, sumY = 0, sumXX = 0, sumXY = 0, sumYY = 0;
-  for (let i = 0; i < N; i++) {
-    sumX += xs[i]; sumY += ys[i];
-    sumXX += xs[i] * xs[i]; sumXY += xs[i] * ys[i]; sumYY += ys[i] * ys[i];
-  }
-  const meanX = sumX / N, meanY = sumY / N;
-  const sxx = sumXX - N * meanX * meanX;
-  const sxy = sumXY - N * meanX * meanY;
-  const syy = sumYY - N * meanY * meanY;
+  const meanX = xs.reduce((a, b) => a + b, 0) / N;
+  const meanY = ys.reduce((a, b) => a + b, 0) / N;
 
   // Linear R²
-  const slope = sxx !== 0 ? sxy / sxx : 0;
-  let ssRes = 0;
-  for (let i = 0; i < N; i++) {
-    const yPred = meanY + slope * (xs[i] - meanX);
-    ssRes += (ys[i] - yPred) ** 2;
-  }
-  const linearR2 = syy > 0 ? Math.max(0, 1 - ssRes / syy) : 0;
+  const ssRes = xs.reduce((s, x, i) => {
+    const yPred = meanY + ((xs.reduce((a, xi, j) => a + (xi - meanX) * (ys[j] - meanY), 0) /
+      xs.reduce((a, xi) => a + Math.pow(xi - meanX, 2), 0)) * (x - meanX));
+    return s + Math.pow(ys[i] - yPred, 2);
+  }, 0);
+  const ssTot = ys.reduce((s, y) => s + Math.pow(y - meanY, 2), 0);
+  const linearR2 = ssTot > 0 ? Math.max(0, 1 - ssRes / ssTot) : 0;
 
-  // Power-law R² (log-log fit) — same approach
+  // Power-law R² (log-log fit)
   const logX = xs.map(x => Math.log(x));
   const logY = ys.map(y => Math.log(Math.max(y, 0.001)));
-  let slxSum = 0, slySum = 0, slxx = 0, slxy = 0, slyy = 0;
-  for (let i = 0; i < N; i++) {
-    slxSum += logX[i]; slySum += logY[i];
-    slxx += logX[i] * logX[i]; slxy += logX[i] * logY[i]; slyy += logY[i] * logY[i];
-  }
-  const meanLX = slxSum / N, meanLY = slySum / N;
-  const lSxx = slxx - N * meanLX * meanLX;
-  const lSxy = slxy - N * meanLX * meanLY;
-  const lSyy = slyy - N * meanLY * meanLY;
-  const logSlope = lSxx !== 0 ? lSxy / lSxx : 0;
-  let lssRes = 0;
-  for (let i = 0; i < N; i++) {
-    const yPred = meanLY + logSlope * (logX[i] - meanLX);
-    lssRes += (logY[i] - yPred) ** 2;
-  }
-  const powerR2 = lSyy > 0 ? Math.max(0, 1 - lssRes / lSyy) : 0;
+  const meanLX = logX.reduce((a, b) => a + b, 0) / N;
+  const meanLY = logY.reduce((a, b) => a + b, 0) / N;
+  const ssResLog = logX.reduce((s, lx, i) => {
+    const yPred = meanLY + ((logX.reduce((a, lxi, j) => a + (lxi - meanLX) * (logY[j] - meanLY), 0) /
+      logX.reduce((a, lxi) => a + Math.pow(lxi - meanLX, 2), 0)) * (lx - meanLX));
+    return s + Math.pow(logY[i] - yPred, 2);
+  }, 0);
+  const ssTotLog = logY.reduce((s, ly) => s + Math.pow(ly - meanLY, 2), 0);
+  const powerR2 = ssTotLog > 0 ? Math.max(0, 1 - ssResLog / ssTotLog) : 0;
 
   // AI signal: very high linearR2 (trajectory is linear) AND powerR2 NOT much better
   // Human signal: powerR2 >> linearR2 (power-law fits much better than linear)
@@ -3661,26 +3621,16 @@ function sentenceOpenerDiversityScore(sentences: string[]): { score: number; det
 // ─────────────────────────────────────────────────────────────────────────────
 
 function punctuationEntropyScore(text: string): { score: number; details: string } {
-  // OPT P17: Single-pass char scan instead of 9 separate regex.match calls.
-  // Avoids 9 full-text scans — O(9n) → O(n).
   const counts: Record<string, number> = { comma: 0, period: 0, semicolon: 0, colon: 0, emdash: 0, question: 0, exclaim: 0, paren: 0, ellipsis: 0 };
-  let i = 0;
-  while (i < text.length) {
-    const c = text[i];
-    if (c === ',') { counts.comma++; }
-    else if (c === ';') { counts.semicolon++; }
-    else if (c === '?') { counts.question++; }
-    else if (c === '!') { counts.exclaim++; }
-    else if (c === '(') { counts.paren++; }
-    else if (c === ':') { counts.colon++; }
-    else if (c === '—') { counts.emdash++; }
-    else if (c === '-' && i > 0 && text[i-1] === ' ' && i < text.length - 1 && text[i+1] === ' ') { counts.emdash++; }
-    else if (c === '.') {
-      if (text[i+1] === '.' && text[i+2] === '.') { counts.ellipsis++; i += 2; }
-      else { counts.period++; }
-    }
-    i++;
-  }
+  counts.comma     = (text.match(/,/g) || []).length;
+  counts.period    = (text.match(/\.(?!\.)/g) || []).length;
+  counts.semicolon = (text.match(/;/g) || []).length;
+  counts.colon     = (text.match(/:/g) || []).length;
+  counts.emdash    = (text.match(/—| - /g) || []).length;
+  counts.question  = (text.match(/\?/g) || []).length;
+  counts.exclaim   = (text.match(/!/g) || []).length;
+  counts.paren     = (text.match(/\(/g) || []).length;
+  counts.ellipsis  = (text.match(/\.\.\.|…/g) || []).length;
 
   const totalPunct = Object.values(counts).reduce((a, b) => a + b, 0);
   if (totalPunct < 10) return { score: 0, details: "Insufficient punctuation for diversity analysis." };
@@ -3720,19 +3670,10 @@ function paragraphLengthUniformityScore(text: string): { score: number; details:
   if (paragraphs.length < 3) return { score: 0, details: "Insufficient paragraphs for length uniformity analysis (need ≥3)." };
 
   const paraLengths = paragraphs.map(p => p.split(/\s+/).length);
-  const n = paraLengths.length;
-  // OPT P18: single-pass Welford online mean/variance — avoids 3 separate array traversals
-  let mean = 0, M2 = 0, minLen = Infinity, maxLen = -Infinity;
-  for (let i = 0; i < n; i++) {
-    const l = paraLengths[i];
-    const delta = l - mean;
-    mean += delta / (i + 1);
-    M2 += delta * (l - mean);
-    if (l < minLen) minLen = l;
-    if (l > maxLen) maxLen = l;
-  }
-  const sd = Math.sqrt(M2 / n);
-  const cv = sd / Math.max(mean, 1);
+  const avg = paraLengths.reduce((a, b) => a + b, 0) / paraLengths.length;
+  const variance = paraLengths.reduce((s, l) => s + Math.pow(l - avg, 2), 0) / paraLengths.length;
+  const sd = Math.sqrt(variance);
+  const cv = sd / Math.max(avg, 1);
 
   // Low CV = suspiciously uniform paragraph lengths (AI marker)
   let score = 0;
@@ -3740,11 +3681,11 @@ function paragraphLengthUniformityScore(text: string): { score: number; details:
   else if (cv < 0.20 && paragraphs.length >= 4) score = 12;
   else if (cv < 0.28 && paragraphs.length >= 5) score = 6;
 
-  const minL = Math.round(minLen);
-  const maxL = Math.round(maxLen);
+  const minLen = Math.min(...paraLengths);
+  const maxLen = Math.max(...paraLengths);
   const details = score > 0
-    ? `Paragraph length CV: ${cv.toFixed(3)} across ${paragraphs.length} paragraphs (mean ${mean.toFixed(0)} words, SD ${sd.toFixed(1)}, range ${minL}–${maxL}). AI produces paragraphs of suspiciously uniform length. Human writers vary paragraph length based on content density and rhetorical purpose.`
-    : `Paragraph length CV: ${cv.toFixed(3)} — natural length variation across ${paragraphs.length} paragraphs (${minL}–${maxL} words each).`;
+    ? `Paragraph length CV: ${cv.toFixed(3)} across ${paragraphs.length} paragraphs (mean ${avg.toFixed(0)} words, SD ${sd.toFixed(1)}, range ${minLen}–${maxLen}). AI produces paragraphs of suspiciously uniform length. Human writers vary paragraph length based on content density and rhetorical purpose.`
+    : `Paragraph length CV: ${cv.toFixed(3)} — natural length variation across ${paragraphs.length} paragraphs (${minLen}–${maxLen} words each).`;
 
   return { score, details };
 }
@@ -3761,30 +3702,15 @@ function interSentenceCoherenceScore(sentences: string[]): { score: number; deta
   if (sentences.length < 5) return { score: 0, details: "Insufficient sentences for coherence analysis." };
 
   // Compute Jaccard-like overlap between consecutive sentence content words
-  // OPT P14: Pre-allocate two Sets and swap/clear instead of new Set() per pair.
   const similarities: number[] = [];
-  let wA = new Set<string>();
-  let wB = new Set<string>();
-
-  // Populate wA for the first sentence
-  for (const w of (sentences[0].toLowerCase().match(/\b[a-z]{4,}\b/g) || [])) {
-    if (!STOP_WORDS.has(w)) wA.add(w);
-  }
-
   for (let i = 0; i < sentences.length - 1; i++) {
-    // Populate wB for next sentence
-    wB.clear();
-    for (const w of (sentences[i+1].toLowerCase().match(/\b[a-z]{4,}\b/g) || [])) {
-      if (!STOP_WORDS.has(w)) wB.add(w);
-    }
-    if (wA.size >= 3 && wB.size >= 3) {
-      let intersection = 0;
-      wA.forEach(w => { if (wB.has(w)) intersection++; });
-      const union = wA.size + wB.size - intersection;
-      similarities.push(intersection / Math.max(union, 1));
-    }
-    // Swap: wB becomes wA for next iteration (avoids re-parsing sentence i+1)
-    const tmp = wA; wA = wB; wB = tmp;
+    const wA = new Set((sentences[i].toLowerCase().match(/\b[a-z]{4,}\b/g) || []).filter(w => !STOP_WORDS.has(w)));
+    const wB = new Set((sentences[i+1].toLowerCase().match(/\b[a-z]{4,}\b/g) || []).filter(w => !STOP_WORDS.has(w)));
+    if (wA.size < 3 || wB.size < 3) continue;
+    let intersection = 0;
+    wA.forEach(w => { if (wB.has(w)) intersection++; });
+    const union = wA.size + wB.size - intersection;
+    similarities.push(intersection / Math.max(union, 1));
   }
 
   if (similarities.length < 3) return { score: 0, details: "Insufficient comparable sentence pairs." };
@@ -6828,53 +6754,43 @@ If they disagree (one > 50, one < 30), look for the reason: paraphrased AI? ESL?
 function LiveWordHighlighter({ text }: { text: string }) {
   if (!text.trim()) return null;
 
-  // OPT P12/A12: Use pre-built module-level bigram structures (no per-render rebuilding).
-  // OPT P13: Single tokenRe pass replaces the previous double-scan (word list + tokenRe).
+  // Enhancement #3: derive bigram list from main AI_BIGRAMS set (previously a
+  // hardcoded 28-phrase list that was out of sync with the 200+ phrase main set).
+  // This ensures Philippine bigrams and all future additions auto-appear here.
+  const AI_BIGRAMS_FLAT = Array.from(AI_BIGRAMS);
 
-  // Build bigramSet: which word indices are part of a known AI bigram
+  // Tokenize while preserving whitespace/punctuation positions
+  const tokens: Array<{ text: string; type: "strong" | "medium" | "bigram" | "normal" }> = [];
+  const words = text.split(/(\s+|[.,;:!?()\[\]"'\n])/);
+  let i = 0;
+  let processed = 0;
+
+  // First pass: mark bigrams (check pairs of consecutive word tokens)
   const wordTokens = text.toLowerCase().match(/\b[a-z]+\b/g) || [];
-  const bigramSet = new Set<number>();
-  for (let wi = 0; wi < wordTokens.length; wi++) {
-    const w0 = wordTokens[wi];
-    const w1 = wi + 1 < wordTokens.length ? wordTokens[wi + 1] : "";
-    const w2 = wi + 2 < wordTokens.length ? wordTokens[wi + 2] : "";
-    const w3 = wi + 3 < wordTokens.length ? wordTokens[wi + 3] : "";
-
-    // Check 4+ word phrases (rare — small linear scan)
-    if (w1 && w2 && w3) {
-      const quad = `${w0} ${w1} ${w2} ${w3}`;
-      const matched = _LWH_BIGRAM_LONG.find(b => quad.startsWith(b));
-      if (matched) {
-        const len = matched.split(" ").length;
-        for (let k = 0; k < len; k++) bigramSet.add(wi + k);
-        continue;
-      }
-    }
-    // Check 3-word phrases — O(1) Set lookup
-    if (w1 && w2) {
-      const triple = `${w0} ${w1} ${w2}`;
-      if (_LWH_BIGRAM_3_SET.has(triple)) {
-        bigramSet.add(wi); bigramSet.add(wi + 1); bigramSet.add(wi + 2);
-        continue;
-      }
-    }
-    // Check 2-word phrases — O(1) Set lookup
-    if (w1) {
-      const pair = `${w0} ${w1}`;
-      if (_LWH_BIGRAM_2_SET.has(pair)) {
-        bigramSet.add(wi); bigramSet.add(wi + 1);
-      }
+  const bigramSet = new Set<number>(); // indices of words that are part of a bigram
+  for (let wi = 0; wi < wordTokens.length - 1; wi++) {
+    const pair = wordTokens[wi] + " " + wordTokens[wi + 1];
+    const triple = wi < wordTokens.length - 2 ? pair + " " + wordTokens[wi + 2] : "";
+    if (AI_BIGRAMS_FLAT.some(b => triple.startsWith(b) || b === pair)) {
+      bigramSet.add(wi);
+      bigramSet.add(wi + 1);
+      if (triple && AI_BIGRAMS_FLAT.some(b => b === triple)) bigramSet.add(wi + 2);
     }
   }
 
-  // OPT A13: Use pre-compiled module-level tokenRe (reset lastIndex before use)
-  _LWH_TOKEN_RE.lastIndex = 0;
-  const parts: Array<{ segment: string; cls: string }> = [];
+  // Build rendered spans
   let wordIdx = 0;
+  const parts: Array<{ segment: string; cls: string }> = [];
+  let remaining = text;
+  let pos = 0;
+
+  // Simple word-by-word scan
+  const tokenRe = /\b[a-zA-Z]+\b/g;
   let lastEnd = 0;
   let m: RegExpExecArray | null;
 
-  while ((m = _LWH_TOKEN_RE.exec(text)) !== null) {
+  while ((m = tokenRe.exec(text)) !== null) {
+    // Add any non-word gap before this word
     if (m.index > lastEnd) {
       parts.push({ segment: text.slice(lastEnd, m.index), cls: "" });
     }
@@ -8032,11 +7948,7 @@ export default function DetectorPage() {
     setBurstResult(bFinal3);
   }, [neuralResult, rawPerpResult, rawBurstResult]);
 
-  // OPT P20: Memoize word count — inputText is the only dependency
-  const wc = useMemo(
-    () => inputText.trim() ? inputText.trim().split(/\s+/).length : 0,
-    [inputText]
-  );
+  const wc = inputText.trim() ? inputText.trim().split(/\s+/).length : 0;
   const loading = loadingT || loadingG || loadingN;
 
   // OPT P7: Sync stable refs after loading/inputText/handleAnalyze are defined.
@@ -8143,8 +8055,7 @@ export default function DetectorPage() {
 
     return { avgAI: finalAvgAI, avgMixed, avgHuman, tier: getTier(finalAvgAI), consensusNote, bimodalNote, bimodalStrength };
   };
-  // OPT P21: Memoize combined/shouldAbstain/banner — only recompute when engine results change
-  const combined = useMemo(() => {
+  const combined = (() => {
     const raw = getCombined();
     if (!raw) return null;
     const cal = loadCalibration();
@@ -8152,13 +8063,12 @@ export default function DetectorPage() {
     if (shift === 0) return raw;
     const adjusted = Math.max(0, Math.min(100, raw.avgAI + shift));
     return { ...raw, avgAI: adjusted, tier: getTier(adjusted) };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [perpResult, burstResult, neuralResult]);
+  })();
 
   // ── CONFIDENCE-BASED ABSTENTION (Architectural #16) ──────────────────────
   // When all engines report INCONCLUSIVE and the disagreement index is high,
   // abstain from giving any verdict rather than averaging uncertain signals.
-  const shouldAbstain = useMemo(() => {
+  const shouldAbstain = (() => {
     if (!perpResult || !burstResult) return false;
     const allInconclusive =
       perpResult.evidenceStrength === "INCONCLUSIVE" &&
@@ -8170,10 +8080,10 @@ export default function DetectorPage() {
     const minS = Math.min(...scores);
     const maxS = Math.max(...scores);
     return (maxS - minS) > 40; // > 40 point spread with all inconclusive = abstain
-  }, [perpResult, burstResult, neuralResult]);
+  })();
 
   // Consensus banner
-  const banner = useMemo(() => {
+  const getConsensusBanner = () => {
     if (!perpResult || !burstResult) return null;
     const pHigh = ["HIGH","MEDIUM"].includes(perpResult.evidenceStrength);
     const bHigh = ["HIGH","MEDIUM"].includes(burstResult.evidenceStrength);
@@ -8188,7 +8098,8 @@ export default function DetectorPage() {
     if ((pHigh && bLow) || (bHigh && pLow))
                                  return { text: "Only one engine elevated — insufficient for AI verdict, human review required", color: "#b45309", bg: "#fffbeb", border: "#fcd34d", icon: "⚠" };
     return                              { text: "Mixed evidence across engines — treat as inconclusive",                    color: "#d97706", bg: "#fffbeb", border: "#fde68a", icon: "◈" };
-  }, [perpResult, burstResult, neuralResult]);
+  };
+  const banner = getConsensusBanner();
 
   const handleAnalyze = useCallback(() => {
     setError("");
