@@ -7045,8 +7045,8 @@ function RadarChartFingerprint({ perpResult, burstResult, neuralResult }: {
         {dims.map((d, i) => (
           <div key={i} className="flex items-center gap-1.5">
             <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: d.color }} />
-            <span className="text-[9px] font-bold" style={{ color: d.color }}>{d.score}%</span>
             <span className="text-[9px] text-slate-600 font-medium">{d.label}</span>
+            <span className="ml-auto text-[9px] font-bold" style={{ color: d.color }}>{d.score}%</span>
           </div>
         ))}
       </div>
