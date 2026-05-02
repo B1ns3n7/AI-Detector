@@ -172,63 +172,115 @@ async function fsGetArray<T>(path: string, field: string): Promise<T[]> {
 
 // ── Firebase-backed storage functions (replace localStorage) ──────────────────
 
+// ── Firebase-backed storage functions ────────────────────────────────────────
+// Each record is stored as its own Firestore document in a subcollection.
+// This avoids the 1MB per-document limit that kills array-in-document storage.
+//
+// Structure:
+//   users/{uid}/experiments/{runId}   — one doc per experiment run
+//   users/{uid}/history/{scanId}      — one doc per scan
+//   users/{uid}/monitoring/{ts}       — one doc per monitoring event
+//   users/{uid}/data/calibration      — single small doc (calibration is tiny)
+
 async function loadExperimentsAsync(): Promise<ExperimentRun[]> {
   const ok = await initFirebase();
   if (!ok) return loadExperimentsLocal();
-  return fsGetArray<ExperimentRun>(`users/${uid()}/experiments`, "runs");
+  try {
+    const { collection, getDocs, orderBy, query, limit } = await import("firebase/firestore");
+    const q = query(
+      collection(_db!, `users/${uid()}/experiments`),
+      orderBy("ts", "desc"),
+      limit(20)
+    );
+    const snap = await getDocs(q);
+    return snap.docs.map(d => d.data() as ExperimentRun);
+  } catch (e) { console.error("loadExperimentsAsync", e); return loadExperimentsLocal(); }
 }
 
 async function saveExperimentsAsync(runs: ExperimentRun[]): Promise<void> {
   const ok = await initFirebase();
   if (!ok) { saveExperimentsLocal(runs); return; }
-  await fsSet(`users/${uid()}/experiments`, { runs: runs.slice(0, 20) });
-  saveExperimentsLocal(runs); // keep local copy as offline fallback
+  try {
+    const { doc, setDoc, deleteDoc, collection, getDocs } = await import("firebase/firestore");
+    // Write each run as its own document — strip the heavy results array to save space
+    for (const run of runs.slice(0, 20)) {
+      const slim = { ...run, results: run.results.slice(0, 100) }; // cap at 100 rows per run
+      await setDoc(doc(_db!, `users/${uid()}/experiments/${run.id}`), slim);
+    }
+    saveExperimentsLocal(runs);
+  } catch (e) { console.error("saveExperimentsAsync", e); saveExperimentsLocal(runs); }
 }
 
 async function loadHistoryAsync(): Promise<ScanRecord[]> {
   const ok = await initFirebase();
   if (!ok) return loadHistoryLocal();
-  return fsGetArray<ScanRecord>(`users/${uid()}/history`, "records");
+  try {
+    const { collection, getDocs, orderBy, query, limit } = await import("firebase/firestore");
+    const q = query(
+      collection(_db!, `users/${uid()}/history`),
+      orderBy("ts", "desc"),
+      limit(50)
+    );
+    const snap = await getDocs(q);
+    return snap.docs.map(d => d.data() as ScanRecord);
+  } catch (e) { console.error("loadHistoryAsync", e); return loadHistoryLocal(); }
 }
 
 async function saveHistoryAsync(records: ScanRecord[]): Promise<void> {
   const ok = await initFirebase();
   if (!ok) { saveHistoryLocal(records); return; }
-  await fsSet(`users/${uid()}/history`, { records: records.slice(0, 50) });
-  saveHistoryLocal(records);
+  try {
+    const { doc, setDoc } = await import("firebase/firestore");
+    for (const rec of records.slice(0, 50)) {
+      await setDoc(doc(_db!, `users/${uid()}/history/${rec.id}`), rec);
+    }
+    saveHistoryLocal(records);
+  } catch (e) { console.error("saveHistoryAsync", e); saveHistoryLocal(records); }
 }
 
 async function loadMonitoringEventsAsync(): Promise<MonitoringEvent[]> {
   const ok = await initFirebase();
   if (!ok) return loadMonitoringEventsLocal();
-  return fsGetArray<MonitoringEvent>(`users/${uid()}/monitoring`, "events");
+  try {
+    const { collection, getDocs, orderBy, query, limit } = await import("firebase/firestore");
+    const q = query(
+      collection(_db!, `users/${uid()}/monitoring`),
+      orderBy("ts", "desc"),
+      limit(200)
+    );
+    const snap = await getDocs(q);
+    return snap.docs.map(d => d.data() as MonitoringEvent);
+  } catch (e) { console.error("loadMonitoringEventsAsync", e); return loadMonitoringEventsLocal(); }
 }
 
 async function saveMonitoringEventAsync(evt: MonitoringEvent): Promise<void> {
   const ok = await initFirebase();
   if (!ok) { saveMonitoringEventLocal(evt); return; }
-  await fsAddToArray<MonitoringEvent>(`users/${uid()}/monitoring`, "events", evt, 200);
-  saveMonitoringEventLocal(evt);
-
-  // Also write to shared global monitoring collection (cross-user Monitor dashboard)
-  await fsAddToArray<MonitoringEvent & { uid: string }>(
-    "shared/monitoring/global", "events",
-    { ...evt, uid: uid() }, 1000
-  );
+  try {
+    const { doc, setDoc } = await import("firebase/firestore");
+    await setDoc(doc(_db!, `users/${uid()}/monitoring/${evt.ts}`), evt);
+    // Also write to shared global collection
+    await setDoc(doc(_db!, `sharedMonitoring/${evt.ts}_${uid().slice(0,8)}`), { ...evt, uid: uid() });
+    saveMonitoringEventLocal(evt);
+  } catch (e) { console.error("saveMonitoringEventAsync", e); saveMonitoringEventLocal(evt); }
 }
 
 async function loadCalibrationAsync(): Promise<CalibrationData> {
   const ok = await initFirebase();
   if (!ok) return loadCalibrationLocal();
-  const data = await fsGet<CalibrationData>(`users/${uid()}/calibration`);
-  return data ?? { totalScans: 0, reviewerOverrides: 0, systemSaidAI_reviewerSaidHuman: 0, systemSaidHuman_reviewerSaidAI: 0, bandOverrides: {} };
+  try {
+    const data = await fsGet<CalibrationData>(`users/${uid()}/data/calibration`);
+    return data ?? { totalScans: 0, reviewerOverrides: 0, systemSaidAI_reviewerSaidHuman: 0, systemSaidHuman_reviewerSaidAI: 0, bandOverrides: {} };
+  } catch (e) { return loadCalibrationLocal(); }
 }
 
 async function saveCalibrationAsync(data: CalibrationData): Promise<void> {
   const ok = await initFirebase();
   if (!ok) { saveCalibrationLocal(data); return; }
-  await fsSet(`users/${uid()}/calibration`, data as object);
-  saveCalibrationLocal(data);
+  try {
+    await fsSet(`users/${uid()}/data/calibration`, data as object);
+    saveCalibrationLocal(data);
+  } catch (e) { saveCalibrationLocal(data); }
 }
 
 // ── Local fallbacks (original localStorage implementations) ───────────────────
@@ -438,7 +490,7 @@ function parseJSONDataset(text: string): DatasetRow[] {
     return arr.map((item: any, i: number) => ({
       id: String(item.id ?? i + 1),
       text: String(item.text ?? item.content ?? item.body ?? item.passage ?? ""),
-      label: item.label ?? item.name ?? item.title ?? `Item ${i + 1}`,
+      label: String(item.label ?? item.name ?? item.title ?? `Item ${i + 1}`),
       groundTruth: (() => {
         const gt = String(item.groundTruth ?? item.ground_truth ?? item.truth ?? item.class ?? "").toLowerCase();
         return gt === "ai" || gt === "ai-generated" || gt === "1" ? "AI"
@@ -8697,7 +8749,7 @@ function DatasetEvaluationPanel({
   const [dragOver, setDragOver] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const [activeMetricTab, setActiveMetricTab] = useState<"table" | "roc" | "confusion" | "compare">("table");
-  const [rocThreshold, setRocThreshold] = useState(50);
+  const [rocThreshold, setRocThreshold] = useState(15);
 
   const handleFile = async (file: File) => {
     setError(""); setRows([]); setResults(null);
@@ -8721,11 +8773,12 @@ function DatasetEvaluationPanel({
       const sanitised = sanitiseInput(row.text.trim());
       const p = runPerplexityEngine(sanitised);
       const b = runBurstinessEngine(sanitised);
-      const elevRatio = (r: EngineResult) =>
-        r.sentences.length > 0 ? r.sentences.filter(s => s.label === "elevated").length / r.sentences.length : 0;
-      const pBd = uiDeriveBreakdown(p.internalScore, elevRatio(p));
-      const bBd = uiDeriveBreakdown(b.internalScore, elevRatio(b));
-      const combinedAI = Math.round((pBd.ai + bBd.ai) / 2);
+
+      // Use internalScore directly for batch scoring — uiDeriveBreakdown is
+      // designed for the display UI and returns ai=0 for short texts (score ≤10).
+      // For batch evaluation we need the raw engine scores, not the display mapping.
+      // Average both engine scores and clamp to 0-100.
+      const combinedAI = Math.min(100, Math.max(0, Math.round((p.internalScore + b.internalScore) / 2)));
       const tier = getTier(combinedAI);
       batchResults.push({
         row, perpScore: p.internalScore, burstScore: b.internalScore,
@@ -8767,6 +8820,9 @@ function DatasetEvaluationPanel({
   const rocPoints = results ? computeROCPoints(results) : [];
   const metrics = results ? computeClassificationMetrics(results, rocThreshold) : null;
   const hasGT = rows.some(r => r.groundTruth);
+  const aiCountDisplay   = results ? results.filter(r => r.combinedAI >= rocThreshold).length : 0;
+  const humanCountDisplay = results ? results.filter(r => r.combinedAI < rocThreshold).length : 0;
+  const avgAIDisplay     = results ? Math.round(results.reduce((s, r) => s + r.combinedAI, 0) / results.length) : 0;
 
   return (
     <div className="space-y-5">
@@ -8804,6 +8860,8 @@ function DatasetEvaluationPanel({
         </div>
 
         {error && <p className="text-xs text-red-600 mt-2">{error}</p>}
+
+
 
         {rows.length > 0 && (
           <button onClick={runBatch} disabled={running}
@@ -8843,9 +8901,9 @@ function DatasetEvaluationPanel({
             <div className="grid grid-cols-4 gap-3 mb-5">
               {[
                 { label: "Texts Analyzed", val: results.length, color: "#1b3a6b" },
-                { label: "AI-Flagged", val: results.filter(r => r.verdict.toLowerCase().includes("ai")).length, color: "#dc2626" },
-                { label: "Human", val: results.filter(r => r.verdict.toLowerCase().includes("human") && !r.verdict.toLowerCase().includes("review")).length, color: "#16a34a" },
-                { label: "Avg AI Score", val: `${Math.round(results.reduce((s, r) => s + r.combinedAI, 0) / results.length)}%`, color: "#7c3aed" },
+                { label: `AI-Flagged (≥${rocThreshold}%)`, val: aiCountDisplay, color: "#dc2626" },
+                { label: `Human (<${rocThreshold}%)`, val: humanCountDisplay, color: "#16a34a" },
+                { label: "Avg AI Score", val: `${avgAIDisplay}%`, color: "#7c3aed" },
               ].map(({ label, val, color }) => (
                 <div key={label} className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-center">
                   <p className="text-xl font-black" style={{ color }}>{val}</p>
@@ -9390,7 +9448,15 @@ function MonitoringDashboard() {
       <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
         <div className="px-5 py-3 border-b border-slate-100 flex items-center justify-between">
           <p className="text-xs font-bold text-slate-700">Recent Scan Events</p>
-          <button onClick={() => { localStorage.removeItem("aidetect_monitoring"); saveMonitoringEventAsync && fsSet(`users/${uid()}/monitoring`, { events: [] }); setEvents([]); }}
+          <button onClick={async () => {
+            localStorage.removeItem("aidetect_monitoring");
+            if (_db) {
+              const { collection, getDocs, deleteDoc } = await import("firebase/firestore");
+              const snap = await getDocs(collection(_db, `users/${uid()}/monitoring`));
+              snap.docs.forEach(d => deleteDoc(d.ref));
+            }
+            setEvents([]);
+          }}
             className="text-[10px] text-slate-400 hover:text-red-500 transition-colors">Clear</button>
         </div>
         <div className="overflow-x-auto">
