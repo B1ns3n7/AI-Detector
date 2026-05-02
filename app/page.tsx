@@ -490,7 +490,7 @@ function parseJSONDataset(text: string): DatasetRow[] {
     return arr.map((item: any, i: number) => ({
       id: String(item.id ?? i + 1),
       text: String(item.text ?? item.content ?? item.body ?? item.passage ?? ""),
-      label: item.label ?? item.name ?? item.title ?? `Item ${i + 1}`,
+      label: String(item.label ?? item.name ?? item.title ?? `Item ${i + 1}`),
       groundTruth: (() => {
         const gt = String(item.groundTruth ?? item.ground_truth ?? item.truth ?? item.class ?? "").toLowerCase();
         return gt === "ai" || gt === "ai-generated" || gt === "1" ? "AI"
