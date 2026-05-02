@@ -9519,6 +9519,21 @@ export default function DetectorPage() {
   const [urlInput,       setUrlInput]       = useState("");
   const [urlLoading,     setUrlLoading]     = useState(false);
   const { user, loading: authLoading, error: authError, signInWithGoogle, signInAnon, signOut } = useFirebaseAuth();
+  const ADMIN_EMAIL = "vincent.s.rivera@gmail.com";
+  const isAdmin = user?.email === ADMIN_EMAIL;
+  const [logoClickCount, setLogoClickCount] = useState(0);
+  const logoClickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handleLogoClick = () => {
+    const next = logoClickCount + 1;
+    setLogoClickCount(next);
+    if (logoClickTimer.current) clearTimeout(logoClickTimer.current);
+    if (next >= 5) {
+      setLogoClickCount(0);
+      signInWithGoogle();
+    } else {
+      logoClickTimer.current = setTimeout(() => setLogoClickCount(0), 2000);
+    }
+  };
   const [history,        setHistory]        = useState<ScanRecord[]>([]);
   const [activeTab,      setActiveTab]      = useState<"analyze" | "history" | "dataset" | "experiments" | "shap" | "monitoring">("analyze");
   const [showShare,      setShowShare]      = useState(false);
@@ -9930,13 +9945,16 @@ export default function DetectorPage() {
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Inter:wght@600;700&display=swap');`}</style>
       <header className="sticky top-0 z-30 bg-white border-b border-slate-200 shadow-sm">
         <div className="w-full px-8 sm:px-12 h-20 flex items-center justify-between gap-4">
-          {/* Logo */}
-          <div className="flex items-center flex-shrink-0">
+          {/* Logo — click 5x rapidly to trigger admin login */}
+          <div className="flex items-center flex-shrink-0 cursor-default select-none" onClick={handleLogoClick}>
             <div className="flex flex-col" style={{ gap: "10px" }}>
               <span style={{ fontFamily: "'Inter', sans-serif", fontWeight: 700, fontSize: "1.6rem", color: "#1a1a1a", letterSpacing: "-0.02em", lineHeight: 1 }}>MultiLens</span>
               <span style={{ fontFamily: "'Inter', sans-serif", fontWeight: 600, fontSize: "0.85rem", color: "#2563eb", letterSpacing: "0.08em", textTransform: "uppercase", lineHeight: 1 }}>AI Detector</span>
             </div>
           </div>
+          {isAdmin && (
+            <button onClick={signOut} className="text-[10px] text-slate-400 hover:text-red-500 transition-colors px-2 py-1 rounded">Sign out admin</button>
+          )}
 
           {/* Model version badge — Improvement #20 
           <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-50 border border-slate-200">
@@ -9959,24 +9977,36 @@ export default function DetectorPage() {
             />
           </div>
 
-          {/* Nav tabs */}
+          {/* Nav tabs — admin-only tabs hidden from regular users */}
           <nav className="flex items-center gap-1 bg-slate-100 rounded-xl p-1 flex-wrap">
-            {([
-              { id: "analyze", label: "Analyze" },
-              { id: "history", label: `History${history.length > 0 ? ` (${history.length})` : ""}` },
-              { id: "dataset", label: "Dataset" },
-              { id: "experiments", label: `Experiments${experiments.length > 0 ? ` (${experiments.length})` : ""}` },
-              { id: "shap", label: "Signals" },
-              { id: "monitoring", label: "Monitor" },
-            ] as const).map(tab => (
-              <button key={tab.id} onClick={() => setActiveTab(tab.id)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                  activeTab === tab.id ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"
-                }`}>
-                {tab.label}
+            <button onClick={() => setActiveTab("analyze")}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${activeTab === "analyze" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}>
+              Analyze
+            </button>
+            {isAdmin && (<>
+              <button onClick={() => setActiveTab("history")}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${activeTab === "history" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}>
+                History{history.length > 0 ? ` (${history.length})` : ""}
               </button>
-            ))}
+              <button onClick={() => setActiveTab("dataset")}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${activeTab === "dataset" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}>
+                Dataset
+              </button>
+              <button onClick={() => setActiveTab("experiments")}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${activeTab === "experiments" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}>
+                Experiments{experiments.length > 0 ? ` (${experiments.length})` : ""}
+              </button>
+              <button onClick={() => setActiveTab("shap")}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${activeTab === "shap" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}>
+                Signals
+              </button>
+              <button onClick={() => setActiveTab("monitoring")}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${activeTab === "monitoring" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}>
+                Monitor
+              </button>
+            </>)}
           </nav>
+
 
           {/* Right badges 
           <div className="hidden md:flex items-center gap-2">
