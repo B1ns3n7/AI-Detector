@@ -9519,6 +9519,13 @@ export default function DetectorPage() {
   const [urlInput,       setUrlInput]       = useState("");
   const [urlLoading,     setUrlLoading]     = useState(false);
   const { user, loading: authLoading, error: authError, signInWithGoogle, signInAnon, signOut } = useFirebaseAuth();
+
+  // ── Admin access control ─────────────────────────────────────────────────
+  // Only accounts whose email matches ADMIN_EMAILS can access the History,
+  // Dataset, Experiments, Signals, and Monitor tabs.
+  const ADMIN_EMAILS = ["admin@example.com"]; // ← replace with real admin email(s)
+  const isAdmin = !!(user && !user.isAnonymous && user.email && ADMIN_EMAILS.includes(user.email));
+
   const [history,        setHistory]        = useState<ScanRecord[]>([]);
   const [activeTab,      setActiveTab]      = useState<"analyze" | "history" | "dataset" | "experiments" | "shap" | "monitoring">("analyze");
   const [showShare,      setShowShare]      = useState(false);
@@ -9962,13 +9969,13 @@ export default function DetectorPage() {
           {/* Nav tabs */}
           <nav className="flex items-center gap-1 bg-slate-100 rounded-xl p-1 flex-wrap">
             {([
-              { id: "analyze", label: "Analyze" },
-              { id: "history", label: `History${history.length > 0 ? ` (${history.length})` : ""}` },
-              { id: "dataset", label: "Dataset" },
-              { id: "experiments", label: `Experiments${experiments.length > 0 ? ` (${experiments.length})` : ""}` },
-              { id: "shap", label: "Signals" },
-              { id: "monitoring", label: "Monitor" },
-            ] as const).map(tab => (
+              { id: "analyze", label: "Analyze", adminOnly: false },
+              { id: "history", label: `History${history.length > 0 ? ` (${history.length})` : ""}`, adminOnly: true },
+              { id: "dataset", label: "Dataset", adminOnly: true },
+              { id: "experiments", label: `Experiments${experiments.length > 0 ? ` (${experiments.length})` : ""}`, adminOnly: true },
+              { id: "shap", label: "Signals", adminOnly: true },
+              { id: "monitoring", label: "Monitor", adminOnly: true },
+            ] as const).filter(tab => !tab.adminOnly || isAdmin).map(tab => (
               <button key={tab.id} onClick={() => setActiveTab(tab.id)}
                 className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
                   activeTab === tab.id ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"
@@ -9989,15 +9996,26 @@ export default function DetectorPage() {
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
 
+        {/* ── Admin-only gate UI ───────────────────────────────────────── */}
+        {(["history","dataset","experiments","shap","monitoring"] as const).includes(activeTab as any) && !isAdmin && (
+          <div className="flex flex-col items-center justify-center gap-4 py-24 text-center">
+            <div className="w-14 h-14 rounded-2xl bg-slate-100 flex items-center justify-center text-3xl">🔒</div>
+            <div>
+              <p className="text-sm font-bold text-slate-800 mb-1">Administrator Access Required</p>
+              <p className="text-xs text-slate-500">This section is restricted to administrators.<br/>Please sign in with an authorized account.</p>
+            </div>
+          </div>
+        )}
+
         {/* ── History Tab ──────────────────────────────────────────────── */}
-        {activeTab === "history" && (
+        {activeTab === "history" && isAdmin && (
           <div className="max-w-xl mx-auto bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
             <HistoryPanel history={history} onSelect={() => setActiveTab("analyze")} onClear={() => { saveHistoryAsync([]); setHistory([]); }} />
           </div>
         )}
 
         {/* ── Dataset Tab ──────────────────────────────────────────────── */}
-        {activeTab === "dataset" && (
+        {activeTab === "dataset" && isAdmin && (
           <DatasetEvaluationPanel onRunComplete={(run) => {
             const updated = [run, ...loadExperimentsLocal()];
             saveExperimentsAsync(updated);
@@ -10006,17 +10024,17 @@ export default function DetectorPage() {
         )}
 
         {/* ── Experiments Tab ──────────────────────────────────────────── */}
-        {activeTab === "experiments" && (
+        {activeTab === "experiments" && isAdmin && (
           <ExperimentTrackingPanel experiments={experiments} onClear={() => { saveExperimentsAsync([]); setExperiments([]); }} />
         )}
 
         {/* ── SHAP / Signal Attribution Tab ────────────────────────────── */}
-        {activeTab === "shap" && (
+        {activeTab === "shap" && isAdmin && (
           <ShapExplainerPanel perpResult={perpResult} burstResult={burstResult} />
         )}
 
         {/* ── Monitoring Tab ────────────────────────────────────────────── */}
-        {activeTab === "monitoring" && (
+        {activeTab === "monitoring" && isAdmin && (
           <MonitoringDashboard />
         )}
 
@@ -10533,15 +10551,10 @@ export default function DetectorPage() {
                     if (!perpResult && !burstResult) return "";
 
 
-                    // Use actual combined score when reviewer has selected a verdict.
-                    // For preview cards (no verdict yet), show a representative score
-                    // per scenario so each card displays a meaningfully different %.
+                    // Always use the actual combined score so the reviewer card text
+                    // matches the percentages shown in the breakdown bar above.
                     const actualAI = combined?.avgAI ?? 50;
-                    const ai = !judgment
-                      ? verdict === "AI-Generated"  ? Math.max(actualAI, 65)
-                      : verdict === "Mixed"          ? Math.min(Math.max(actualAI, 40), 64)
-                      :                               Math.min(actualAI, 30)
-                      : actualAI;
+                    const ai = actualAI;
 
                     // Sentence-level elevation
                     const elevatedCount = perpResult
