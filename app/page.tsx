@@ -11,7 +11,6 @@ import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 //  5. SHAP-like Signal Contribution Viewer (feature attribution deltas)
 //  6. Real-time Monitoring Dashboard (in-session volume tracking + drift)
 // ═══════════════════════════════════════════════════════════════════════════════
-//--------------------------------------------
 
 // ── Dataset & Evaluation Types ───────────────────────────────────────────────
 
@@ -10580,10 +10579,15 @@ export default function DetectorPage() {
                     if (!perpResult && !burstResult) return "";
 
 
-                    // Always use the actual combined score so the reviewer card text
-                    // matches the percentages shown in the breakdown bar above.
-                    const actualAI = combined?.avgAI ?? 50;
-                    const ai = actualAI;
+                    // Use the actual breakdown percentages from the combined result
+                    // so each verdict card shows the correct matching percentage.
+                    const actualAI    = combined?.avgAI    ?? 50;
+                    const actualMixed = combined?.avgMixed  ?? 0;
+                    const actualHuman = combined?.avgHuman  ?? 50;
+                    // Each verdict card uses its own relevant percentage
+                    const ai = verdict === "AI-Generated" ? actualAI
+                             : verdict === "Mixed"        ? actualMixed
+                             :                             actualHuman;
 
                     // Sentence-level elevation
                     const elevatedCount = perpResult
@@ -10701,7 +10705,7 @@ export default function DetectorPage() {
                     if (verdict === "Mixed") {
                       const parts: string[] = [];
 
-                      parts.push(`The automated analysis returned a score of ${ai}%, which falls in the uncertain middle range — not clearly AI-generated, but not clearly human either.`);
+                      parts.push(`The automated analysis returned a mixed score of ${ai}% — not clearly AI-generated, but not clearly human either.`);
 
                       if (topAISigs.length > 0 && topHumanSigs.length > 0) {
                         parts.push(`On one hand, there are signs that suggest AI involvement: ${topAISigs[0]}${topAISigs[1] ? ` and ${topAISigs[1]}` : ""}. On the other hand, there are also signs of human authorship: ${topHumanSigs[0]}${topHumanSigs[1] ? ` and ${topHumanSigs[1]}` : ""}.`);
@@ -10727,9 +10731,9 @@ export default function DetectorPage() {
                     {
                       const parts: string[] = [];
 
-                      if (ai <= 10)       parts.push(`The automated analysis is confident this text was written by a human, with a very low score of ${ai}%.`);
-                      else if (ai <= 20)  parts.push(`The automated analysis found very few AI-associated patterns, returning a low score of ${ai}%.`);
-                      else                parts.push(`The automated analysis returned a score of ${ai}%, which falls below the threshold for flagging AI-generated content.`);
+                      if (ai >= 70)       parts.push(`The automated analysis is highly confident this text was written by a human, with a human score of ${ai}%.`);
+                      else if (ai >= 50)  parts.push(`The automated analysis found strong indicators of human authorship, returning a human score of ${ai}%.`);
+                      else                parts.push(`The automated analysis returned a human score of ${ai}%, which suggests human-written content.`);
 
                       if (topHumanSigs.length > 0) {
                         if (topHumanSigs.length === 1)
