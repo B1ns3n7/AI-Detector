@@ -1,0 +1,30 @@
+# NEVER upload these — contain API keys
+.env
+*.env
+backend/.env
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# ChromaDB / vector store data
+chroma_db/
+.chroma/
+*.db
+*.sqlite
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+.idea/
+.vscode/
+*.egg-info/
+dist/
+build/
+venv/
+.venv/
+env/

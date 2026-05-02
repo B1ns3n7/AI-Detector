@@ -1,0 +1,12 @@
+fastapi==0.111.0
+uvicorn[standard]==0.30.1
+langchain==0.2.5
+langchain-community==0.2.5
+chromadb==0.5.3
+sentence-transformers==3.0.1
+arxiv==2.1.0
+requests==2.32.3
+python-dotenv==1.0.1
+pydantic==2.7.4
+httpx==0.27.0
+pypdf==4.2.0

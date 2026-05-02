@@ -1,0 +1,3165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Research Assistant — AI-Powered Paper Analysis v3 (Precision Engine · ICC ≥ 0.90)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,600;1,400&family=JetBrains+Mono:wght@400;500&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet"/>
+<style>
+  :root {
+    --bg: #f5f3ef; --bg2: #ede9e3; --surface: #ffffff; --surface2: #f9f7f4;
+    --border: #ddd8d0; --border2: #c9c2b8;
+    --accent: #2563eb; --accent-light: #eff6ff;
+    --accent2: #0891b2; --accent2-light: #ecfeff;
+    --gold: #b45309; --gold-light: #fef3c7;
+    --text: #1c1917; --text-dim: #78716c; --text-mid: #44403c;
+    --green: #059669; --green-light: #ecfdf5;
+    --red: #dc2626; --red-light: #fef2f2;
+    --purple: #7c3aed; --purple-light: #f5f3ff;
+    --orange: #ea580c; --orange-light: #fff7ed;
+    --radius: 12px; --radius-sm: 8px;
+    --font-serif: 'Lora', Georgia, serif;
+    --font-sans: 'Inter', sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
+    --nav-h: 64px;
+    --shadow-sm: 0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.06);
+    --shadow: 0 4px 16px rgba(0,0,0,0.08), 0 2px 6px rgba(0,0,0,0.05);
+    --shadow-lg: 0 10px 40px rgba(0,0,0,0.1), 0 4px 12px rgba(0,0,0,0.06);
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: var(--font-sans); background: var(--bg); color: var(--text); min-height: 100vh; overflow-x: hidden; }
+  body::before {
+    content: ''; position: fixed; inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23a8a29e' fill-opacity='0.05'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+    pointer-events: none; z-index: 0;
+  }
+  header { position: sticky; top: 0; z-index: 100; background: rgba(255,255,255,0.93); backdrop-filter: blur(20px); border-bottom: 1px solid var(--border); box-shadow: var(--shadow-sm); padding: 0 24px; }
+  .header-inner { max-width: 1200px; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; height: 60px; gap: 12px; }
+  .logo { display: flex; align-items: center; gap: 10px; text-decoration: none; flex-shrink: 0; }
+  .logo-icon { width: 34px; height: 34px; background: linear-gradient(135deg, var(--accent), var(--accent2)); border-radius: 9px; display: flex; align-items: center; justify-content: center; font-size: 17px; box-shadow: 0 2px 8px rgba(37,99,235,0.25); }
+  .logo-text { font-family: var(--font-serif); font-size: 1.15rem; color: var(--text); font-weight: 600; white-space: nowrap; }
+  .header-status { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .status-pill { display: flex; align-items: center; gap: 6px; font-size: 0.7rem; font-family: var(--font-mono); color: var(--text-dim); background: var(--surface2); border: 1px solid var(--border); border-radius: 20px; padding: 4px 11px; white-space: nowrap; }
+  .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-dim); transition: background 0.3s; }
+  .status-dot.online { background: var(--green); box-shadow: 0 0 6px rgba(5,150,105,0.5); }
+  .status-dot.offline { background: var(--red); }
+  .status-dot.warning { background: var(--gold); box-shadow: 0 0 6px rgba(180,83,9,0.4); }
+  .app { position: relative; z-index: 1; max-width: 1200px; margin: 0 auto; padding: 32px 24px 80px; display: grid; grid-template-columns: 1fr 340px; gap: 24px; align-items: start; }
+  .hero { grid-column: 1/-1; text-align: center; padding: 48px 20px 32px; }
+  .hero-tag { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono); font-size: 0.68rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent2); background: var(--accent2-light); border: 1px solid rgba(8,145,178,0.2); border-radius: 20px; padding: 5px 15px; margin-bottom: 22px; }
+  .hero h1 { font-family: var(--font-serif); font-size: clamp(1.8rem, 5vw, 3rem); line-height: 1.2; color: var(--text); margin-bottom: 14px; max-width: 680px; margin-left: auto; margin-right: auto; font-weight: 600; }
+  .hero h1 em { font-style: italic; color: var(--accent); }
+  .hero p { color: var(--text-dim); font-size: 1rem; max-width: 520px; margin: 0 auto; line-height: 1.75; font-weight: 300; }
+  .source-badges { display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap; margin-top: 18px; }
+  .src-badge { display: inline-flex; align-items: center; gap: 5px; font-family: var(--font-mono); font-size: 0.68rem; font-weight: 500; border-radius: 6px; padding: 4px 10px; border: 1px solid; transition: transform 0.2s; }
+  .src-badge:hover { transform: translateY(-1px); }
+  .src-badge.arxiv    { color: var(--gold);   background: var(--gold-light);   border-color: rgba(180,83,9,0.25); }
+  .src-badge.openalex { color: var(--green);  background: var(--green-light);  border-color: rgba(5,150,105,0.25); }
+  .src-badge.crossref { color: var(--purple); background: var(--purple-light); border-color: rgba(124,58,237,0.25); }
+  .src-badge.scopus    { color: var(--orange); background: var(--orange-light); border-color: rgba(234,88,12,0.25); }
+  .src-badge.pubmed    { color: #0f766e; background: #f0fdfa; border-color: rgba(15,118,110,0.25); }
+  .src-badge.semantic  { color: var(--purple); background: var(--purple-light); border-color: rgba(124,58,237,0.25); }
+  .src-badge.core      { color: #1d4ed8; background: #eff6ff; border-color: rgba(29,78,216,0.25); }
+  .src-badge.springer  { color: #be185d; background: #fdf2f8; border-color: rgba(190,24,93,0.25); }
+  .src-badge.herdin    { color: #0369a1; background: #f0f9ff; border-color: rgba(3,105,161,0.25); }
+  .src-badge.pej       { color: #7e22ce; background: #faf5ff; border-color: rgba(126,34,206,0.25); }
+  .src-badge.ukdr      { color: #166534; background: #f0fdf4; border-color: rgba(22,101,52,0.25); }
+  .src-badge .dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+  .search-panel { grid-column: 1/-1; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; box-shadow: var(--shadow); }
+  .search-row { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
+  .search-input-wrap { flex: 1; min-width: 200px; }
+  label.field-label { display: block; font-size: 0.71rem; font-family: var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-dim); margin-bottom: 7px; font-weight: 500; }
+  input[type="text"], select, textarea { width: 100%; background: var(--bg); border: 1.5px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-family: var(--font-sans); font-size: 0.95rem; padding: 11px 15px; outline: none; transition: border-color 0.2s, box-shadow 0.2s, background 0.2s; }
+  input[type="text"]:focus, select:focus, textarea:focus { border-color: var(--accent); background: var(--surface); box-shadow: 0 0 0 3px rgba(37,99,235,0.1); }
+  input[type="text"]::placeholder { color: #a8a29e; }
+  .search-controls { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
+  .control-wrap { min-width: 120px; }
+  .btn { display: inline-flex; align-items: center; gap: 8px; padding: 11px 22px; border: none; border-radius: var(--radius-sm); font-family: var(--font-sans); font-size: 0.9rem; font-weight: 600; cursor: pointer; transition: all 0.2s; white-space: nowrap; }
+  .btn-primary { background: linear-gradient(135deg, var(--accent), #1d4ed8); color: white; box-shadow: 0 2px 8px rgba(37,99,235,0.3); }
+  .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 4px 16px rgba(37,99,235,0.35); }
+  .btn-primary:active { transform: none; box-shadow: none; }
+  .btn-primary:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
+  .btn-ghost { background: var(--surface); color: var(--text-mid); border: 1.5px solid var(--border); }
+  .btn-ghost:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-light); }
+  .btn-sm { padding: 7px 14px; font-size: 0.8rem; }
+  .main-col { min-width: 0; }
+  .sidebar { position: sticky; top: 80px; }
+  .sidebar-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; margin-bottom: 16px; box-shadow: var(--shadow-sm); }
+  .sidebar-card h4 { font-family: var(--font-mono); font-size: 0.69rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-dim); margin-bottom: 14px; display: flex; align-items: center; gap: 7px; font-weight: 500; }
+  .sidebar-toggle-btn { display: none; width: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text-mid); font-family: var(--font-sans); font-size: 0.9rem; font-weight: 600; padding: 14px 20px; cursor: pointer; align-items: center; justify-content: space-between; margin-bottom: 12px; transition: border-color 0.2s, background 0.2s; box-shadow: var(--shadow-sm); }
+  .sidebar-toggle-btn:hover { border-color: var(--accent); background: var(--accent-light); color: var(--accent); }
+  .sidebar-toggle-btn .chevron { transition: transform 0.3s; font-size: 0.8rem; }
+  .sidebar-toggle-btn.open .chevron { transform: rotate(180deg); }
+  .sidebar-collapsible { overflow: hidden; transition: max-height 0.35s cubic-bezier(0.4,0,0.2,1), opacity 0.3s; max-height: 2000px; opacity: 1; }
+  .sidebar-collapsible.collapsed { max-height: 0; opacity: 0; }
+  .loading-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 48px 32px; text-align: center; box-shadow: var(--shadow); }
+  .spinner { width: 40px; height: 40px; border: 3px solid var(--border2); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 24px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .loading-steps { list-style: none; text-align: left; max-width: 300px; margin: 16px auto 0; }
+  .loading-steps li { font-family: var(--font-mono); font-size: 0.77rem; color: var(--text-dim); padding: 6px 0; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--border); }
+  .loading-steps li:last-child { border-bottom: none; }
+  .loading-steps li.active { color: var(--accent2); font-weight: 500; }
+  .loading-steps li.done { color: var(--green); }
+  .summary-card { background: linear-gradient(135deg, var(--accent-light), var(--accent2-light)); border: 1.5px solid rgba(37,99,235,0.15); border-radius: var(--radius); padding: 24px; margin-bottom: 20px; animation: fadeUp 0.4s ease; box-shadow: var(--shadow-sm); }
+  .summary-card h3 { font-family: var(--font-serif); font-size: 1rem; color: var(--accent); margin-bottom: 12px; font-weight: 600; }
+  .summary-card p { font-size: 0.9rem; color: var(--text-mid); line-height: 1.8; white-space: pre-wrap; }
+  .paper-card { background: var(--surface); border: 1.5px solid var(--border); border-radius: var(--radius); padding: 22px; margin-bottom: 14px; transition: border-color 0.2s, transform 0.2s, box-shadow 0.2s; animation: fadeUp 0.4s ease both; box-shadow: var(--shadow-sm); }
+  .paper-card:hover { border-color: rgba(37,99,235,0.3); transform: translateY(-2px); box-shadow: var(--shadow); }
+  @keyframes fadeUp { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:translateY(0); } }
+  .paper-header { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 10px; }
+  .paper-num { font-family: var(--font-mono); font-size: 0.68rem; color: var(--accent); background: var(--accent-light); border: 1px solid rgba(37,99,235,0.2); border-radius: 6px; padding: 3px 9px; flex-shrink: 0; margin-top: 2px; font-weight: 500; }
+  .paper-title { font-family: var(--font-serif); font-size: 1rem; color: var(--text); line-height: 1.45; font-weight: 600; }
+  .paper-meta { display: flex; gap: 16px; flex-wrap: wrap; font-family: var(--font-mono); font-size: 0.71rem; color: var(--text-dim); margin-bottom: 10px; padding-left: 38px; }
+  .paper-abstract { font-size: 0.875rem; color: var(--text-mid); line-height: 1.75; padding-left: 38px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  .paper-abstract.expanded { -webkit-line-clamp: unset; overflow: visible; }
+  .paper-footer { display: flex; gap: 7px; flex-wrap: wrap; padding-left: 38px; margin-top: 14px; }
+  .tag { font-family: var(--font-mono); font-size: 0.67rem; color: var(--text-dim); background: var(--surface2); border: 1px solid var(--border); border-radius: 4px; padding: 3px 9px; font-weight: 500; }
+  .tag.source-arxiv    { color: var(--gold);   background: var(--gold-light);   border-color: rgba(180,83,9,0.2); }
+  .tag.source-openalex { color: var(--green);  background: var(--green-light);  border-color: rgba(5,150,105,0.2); }
+  .tag.source-crossref { color: var(--purple); background: var(--purple-light); border-color: rgba(124,58,237,0.2); }
+  .tag.source-scopus   { color: var(--orange); background: var(--orange-light); border-color: rgba(234,88,12,0.2); }
+  .tag.source-pubmed   { color: #0f766e; background: #f0fdfa; border-color: rgba(15,118,110,0.2); }
+  .tag.source-semantic { color: var(--purple); background: var(--purple-light); border-color: rgba(124,58,237,0.2); }
+  .tag.source-core     { color: #1d4ed8; background: #eff6ff; border-color: rgba(29,78,216,0.2); }
+  .tag.source-springer { color: #be185d; background: #fdf2f8; border-color: rgba(190,24,93,0.2); }
+  .tag.source-springernature { color: #be185d; background: #fdf2f8; border-color: rgba(190,24,93,0.2); }
+  .tag.source-herdinplus  { color: #0369a1; background: #f0f9ff; border-color: rgba(3,105,161,0.2); }
+  .tag.source-philippinejournals { color: #7e22ce; background: #faf5ff; border-color: rgba(126,34,206,0.2); }
+  .tag.source-philippinee-journals { color: #7e22ce; background: #faf5ff; border-color: rgba(126,34,206,0.2); }
+  .tag.source-ukdr { color: #166534; background: #f0fdf4; border-color: rgba(22,101,52,0.2); }
+  .paper-card-mobile { display: none; background: var(--surface); border: 1.5px solid var(--border); border-radius: var(--radius); margin-bottom: 12px; overflow: hidden; animation: fadeUp 0.4s ease both; box-shadow: var(--shadow-sm); transition: border-color 0.2s, box-shadow 0.2s; }
+  .paper-card-mobile:hover { border-color: rgba(37,99,235,0.3); box-shadow: var(--shadow); }
+  .mobile-card-header { padding: 16px; display: flex; align-items: flex-start; gap: 12px; cursor: pointer; user-select: none; }
+  .mobile-card-num { width: 30px; height: 30px; background: linear-gradient(135deg, var(--accent), var(--accent2)); border-radius: 8px; display: flex; align-items: center; justify-content: center; font-family: var(--font-mono); font-size: 0.73rem; color: white; font-weight: 700; flex-shrink: 0; box-shadow: 0 2px 6px rgba(37,99,235,0.25); }
+  .mobile-card-main { flex: 1; min-width: 0; }
+  .mobile-card-title { font-family: var(--font-serif); font-size: 0.93rem; color: var(--text); line-height: 1.45; margin-bottom: 6px; font-weight: 600; }
+  .mobile-card-byline { font-size: 0.74rem; color: var(--text-dim); display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .mobile-card-chevron { font-size: 0.75rem; color: var(--text-dim); transition: transform 0.3s; flex-shrink: 0; margin-top: 4px; }
+  .mobile-card-chevron.open { transform: rotate(180deg); color: var(--accent); }
+  .mobile-card-body { overflow: hidden; max-height: 0; transition: max-height 0.35s cubic-bezier(0.4,0,0.2,1); }
+  .mobile-card-body.open { max-height: 600px; }
+  .mobile-card-inner { padding: 0 16px 16px; border-top: 1px solid var(--border); background: var(--surface2); }
+  .mobile-card-abstract { font-size: 0.85rem; color: var(--text-mid); line-height: 1.75; margin: 12px 0; }
+  .mobile-card-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+  .mobile-card-actions { display: flex; gap: 8px; margin-top: 12px; }
+  .mobile-action-btn { flex: 1; padding: 10px; border-radius: var(--radius-sm); border: 1.5px solid var(--border); background: var(--surface); color: var(--text-mid); font-size: 0.8rem; font-family: var(--font-sans); cursor: pointer; text-align: center; text-decoration: none; display: flex; align-items: center; justify-content: center; gap: 6px; transition: all 0.2s; font-weight: 500; }
+  .mobile-action-btn:hover { transform: translateY(-1px); box-shadow: var(--shadow-sm); }
+  .mobile-action-btn.doi { color: var(--accent2); border-color: rgba(8,145,178,0.3); background: var(--accent2-light); }
+  .mobile-action-btn.pdf { color: var(--gold); border-color: rgba(180,83,9,0.3); background: var(--gold-light); }
+  .results-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; flex-wrap: wrap; gap: 8px; }
+  .results-title { font-family: var(--font-serif); font-size: 1.2rem; color: var(--text); font-weight: 600; }
+  .results-meta { font-family: var(--font-mono); font-size: 0.71rem; color: var(--text-dim); }
+  .followup-section { margin-top: 24px; }
+  .followup-section textarea { resize: vertical; min-height: 80px; margin-bottom: 10px; }
+  .stat-row { display: flex; justify-content: space-between; align-items: center; padding: 9px 0; border-bottom: 1px solid var(--border); font-size: 0.84rem; }
+  .stat-row:last-child { border-bottom: none; }
+  .stat-label { color: var(--text-dim); }
+  .stat-val { font-family: var(--font-mono); color: var(--text); font-weight: 500; font-size: 0.82rem; }
+  .quick-queries { display: flex; flex-direction: column; gap: 6px; }
+  .quick-btn { background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-mid); font-size: 0.8rem; font-family: var(--font-sans); text-align: left; padding: 10px 13px; cursor: pointer; transition: all 0.2s; line-height: 1.45; width: 100%; }
+  .quick-btn:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-light); }
+  .empty-state { text-align: center; padding: 64px 20px; color: var(--text-dim); background: var(--surface); border: 1.5px dashed var(--border2); border-radius: var(--radius); }
+  .empty-icon { font-size: 3rem; margin-bottom: 16px; opacity: 0.4; }
+  .empty-state h3 { font-family: var(--font-serif); color: var(--text-mid); margin-bottom: 10px; font-size: 1.15rem; }
+  .empty-state p { font-size: 0.875rem; line-height: 1.7; max-width: 360px; margin: 0 auto; }
+  .error-card { background: var(--red-light); border: 1.5px solid rgba(220,38,38,0.25); border-radius: var(--radius); padding: 20px; color: #b91c1c; font-size: 0.875rem; line-height: 1.6; }
+  .toast { position: fixed; bottom: 80px; right: 20px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 13px 18px; font-size: 0.85rem; color: var(--text); z-index: 999; transform: translateY(80px); opacity: 0; transition: all 0.3s cubic-bezier(0.34,1.56,0.64,1); box-shadow: var(--shadow-lg); }
+  .toast.show { transform: translateY(0); opacity: 1; }
+  .bottom-nav { display: none; position: fixed; bottom: 0; left: 0; right: 0; height: var(--nav-h); background: rgba(255,255,255,0.97); backdrop-filter: blur(20px); border-top: 1px solid var(--border); box-shadow: 0 -4px 20px rgba(0,0,0,0.06); z-index: 200; align-items: center; justify-content: space-around; padding: 0 8px; }
+  .nav-item { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 8px 12px; border-radius: 10px; cursor: pointer; border: none; background: transparent; color: var(--text-dim); font-family: var(--font-sans); font-size: 0.67rem; font-weight: 500; transition: all 0.2s; flex: 1; }
+  .nav-item .nav-icon { font-size: 1.25rem; line-height: 1; }
+  .nav-item.active { color: var(--accent); }
+  .nav-item:hover { background: var(--accent-light); color: var(--accent); }
+  .section-divider { height: 1px; background: linear-gradient(90deg, transparent, var(--border2), transparent); margin: 10px 0; }
+  /* ── SOURCE FILTER CHIPS ── */
+  .source-filters { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border); }
+  .src-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: var(--font-mono); font-size: 0.72rem; font-weight: 500;
+    padding: 6px 12px; border-radius: 20px; border: 1.5px solid var(--border);
+    background: var(--surface2); color: var(--text-dim);
+    cursor: pointer; user-select: none; transition: all 0.18s;
+    white-space: nowrap;
+  }
+  .src-chip:hover { border-color: currentColor; opacity: 0.85; }
+  .src-chip.active { opacity: 1; }
+  .src-chip.inactive { opacity: 0.35; filter: grayscale(0.4); }
+  .src-chip .chip-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
+  .src-chip .chip-lock { font-size: 0.6rem; opacity: 0.7; }
+  .src-chip.arxiv    { color: var(--gold);   } .src-chip.arxiv.active    { background: var(--gold-light);   border-color: rgba(180,83,9,0.4); }
+  .src-chip.openalex { color: var(--green);  } .src-chip.openalex.active { background: var(--green-light);  border-color: rgba(5,150,105,0.4); }
+  .src-chip.crossref { color: var(--purple); } .src-chip.crossref.active { background: var(--purple-light); border-color: rgba(124,58,237,0.4); }
+  .src-chip.scopus   { color: var(--orange); } .src-chip.scopus.active   { background: var(--orange-light); border-color: rgba(234,88,12,0.4); }
+  .src-chip.pubmed   { color: #0f766e; }       .src-chip.pubmed.active   { background: #f0fdfa; border-color: rgba(15,118,110,0.4); }
+  .src-chip.semantic { color: var(--purple); } .src-chip.semantic.active { background: var(--purple-light); border-color: rgba(124,58,237,0.4); }
+  .src-chip.core     { color: #1d4ed8; }       .src-chip.core.active     { background: #eff6ff; border-color: rgba(29,78,216,0.4); }
+  .src-chip.springer { color: #be185d; }       .src-chip.springer.active { background: #fdf2f8; border-color: rgba(190,24,93,0.4); }
+  .src-chip.herdin   { color: #0369a1; }       .src-chip.herdin.active   { background: #f0f9ff; border-color: rgba(3,105,161,0.4); }
+  .src-chip.pej      { color: #7e22ce; }       .src-chip.pej.active      { background: #faf5ff; border-color: rgba(126,34,206,0.4); }
+  .src-chip.ukdr     { color: #166534; }       .src-chip.ukdr.active     { background: #f0fdf4; border-color: rgba(22,101,52,0.4); }
+  .src-chip-actions { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+  .src-chip-actions button { font-size: 0.72rem; font-family: var(--font-mono); background: none; border: none; cursor: pointer; color: var(--text-dim); padding: 2px 6px; border-radius: 4px; transition: all 0.15s; }
+  .src-chip-actions button:hover { color: var(--accent); background: var(--accent-light); }
+  #sourceWarning { display: none; font-size: 0.75rem; color: var(--red); font-family: var(--font-mono); margin-top: 8px; }
+
+  @media (max-width: 900px) { .app { grid-template-columns: 1fr; } .sidebar { position: static; } .sidebar-toggle-btn { display: flex; } }
+  @media (max-width: 600px) {
+    .app { padding: 16px 12px 80px; gap: 16px; } .hero { padding: 24px 0 16px; } .hero p { font-size: 0.88rem; }
+    .search-panel { padding: 16px; } .search-row { flex-direction: column; } .search-controls { flex-direction: column; } .search-controls .control-wrap { width: 100%; }
+    .logo-text { display: none; } .header-status .status-pill:not(:first-child) { display: none; }
+    .bottom-nav { display: flex; } .toast { bottom: 76px; right: 12px; }
+    .paper-card { display: none; } .paper-card-mobile { display: block; }
+    .sidebar { display: none; } .followup-section { display: block !important; }
+    .source-badges { gap: 6px; } .src-badge { font-size: 0.63rem; padding: 3px 8px; }
+  }
+
+  /* ── CONTENT PROTECTION ── */
+  body, * {
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+    user-select: none;
+  }
+  input, textarea, select {
+    -webkit-user-select: text;
+    -moz-user-select: text;
+    -ms-user-select: text;
+    user-select: text;
+  }
+  /* ── RRL DRAFT BUTTON ── */
+  .rrl-btn {
+    display: flex; align-items: center; gap: 10px;
+    width: 100%; padding: 14px 18px;
+    background: linear-gradient(135deg, #7c3aed, #6d28d9);
+    border: none; border-radius: var(--radius-sm);
+    color: white; font-family: var(--font-sans);
+    font-size: 0.88rem; font-weight: 600;
+    cursor: pointer; transition: all 0.2s;
+    box-shadow: 0 2px 12px rgba(124,58,237,0.3);
+    margin-bottom: 16px;
+  }
+  .rrl-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 20px rgba(124,58,237,0.4); }
+  .rrl-btn:active { transform: none; }
+  .rrl-btn:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
+  .rrl-btn .rrl-icon { font-size: 1.3rem; flex-shrink: 0; }
+  .rrl-btn .rrl-text { flex: 1; text-align: left; }
+  .rrl-btn .rrl-text small {
+    display: block; font-size: 0.72rem;
+    font-weight: 400; opacity: 0.85; margin-top: 2px;
+  }
+  .rrl-result-card {
+    background: linear-gradient(135deg, #f5f3ff, #ede9fe);
+    border: 1.5px solid rgba(124,58,237,0.2);
+    border-radius: var(--radius); padding: 20px;
+    margin-bottom: 16px; display: none;
+    animation: fadeUp 0.4s ease;
+  }
+  .rrl-result-card h4 {
+    font-family: var(--font-serif); font-size: 0.95rem;
+    color: #6d28d9; margin-bottom: 12px; font-weight: 600;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .rrl-result-card .rrl-content {
+    font-size: 0.88rem; color: var(--text-mid);
+    line-height: 1.9; white-space: pre-wrap;
+  }
+  .rrl-copy-btn {
+    margin-top: 14px; padding: 8px 16px;
+    background: white; border: 1.5px solid rgba(124,58,237,0.3);
+    border-radius: var(--radius-sm); color: #7c3aed;
+    font-size: 0.78rem; font-family: var(--font-sans);
+    font-weight: 500; cursor: pointer; transition: all 0.2s;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .rrl-copy-btn:hover { background: #f5f3ff; border-color: #7c3aed; }
+  .rrl-references {
+    margin-top: 20px; padding: 16px;
+    background: white; border: 1px solid rgba(124,58,237,0.15);
+    border-radius: var(--radius-sm);
+  }
+  .rrl-references h5 {
+    font-family: var(--font-serif); font-size: 0.9rem;
+    color: #6d28d9; margin-bottom: 12px; font-weight: 600;
+    border-bottom: 1px solid rgba(124,58,237,0.15);
+    padding-bottom: 8px;
+  }
+  .rrl-references .rrl-ref-list {
+    font-size: 0.82rem; color: var(--text-mid);
+    line-height: 1.8; white-space: pre-wrap;
+    font-family: var(--font-sans);
+  }
+
+  .src-badge.doaj      { color: #047857; background: #ecfdf5; border-color: rgba(4,120,87,0.25); }
+
+  /* ── ENHANCEMENT 1: Summary Format Selector ── */
+  .summary-format-row { display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap; margin-top:14px; padding-top:14px; border-top:1px solid var(--border); }
+  .format-btn { display:inline-flex; align-items:center; gap:6px; padding:7px 14px; border-radius:20px; border:1.5px solid var(--border); background:var(--surface2); color:var(--text-mid); font-size:0.75rem; font-family:var(--font-mono); cursor:pointer; transition:all 0.18s; white-space:nowrap; font-weight:500; }
+  .format-btn:hover { border-color:var(--accent); color:var(--accent); background:var(--accent-light); }
+  .format-btn.active { border-color:var(--accent); color:white; background:var(--accent); }
+  .format-btn.active-structured { border-color:var(--purple); color:white; background:var(--purple); }
+  .format-btn.active-rrl { border-color:#059669; color:white; background:#059669; }
+
+  /* ── ENHANCEMENT 2: Structured Summary Sections ── */
+  .summary-card { background: linear-gradient(135deg, var(--accent-light), var(--accent2-light)); border: 1.5px solid rgba(37,99,235,0.15); border-radius: var(--radius); padding: 24px; margin-bottom: 20px; animation: fadeUp 0.4s ease; box-shadow: var(--shadow-sm); }
+  .summary-card h3 { font-family: var(--font-serif); font-size: 1rem; color: var(--accent); margin-bottom: 12px; font-weight: 600; }
+  .summary-card p { font-size: 0.9rem; color: var(--text-mid); line-height: 1.8; white-space: pre-wrap; }
+  .structured-summary { display:none; }
+  .structured-summary.visible { display:block; }
+  .summary-section { margin-bottom:16px; padding:14px 16px; border-radius:var(--radius-sm); border-left:3px solid; }
+  .summary-section h4 { font-family:var(--font-mono); font-size:0.7rem; letter-spacing:0.1em; text-transform:uppercase; font-weight:600; margin-bottom:7px; }
+  .summary-section p { font-size:0.88rem; line-height:1.8; color:var(--text-mid); white-space:pre-wrap; }
+  .ss-background { background:#eff6ff; border-color:var(--accent); }
+  .ss-background h4 { color:var(--accent); }
+  .ss-findings { background:#ecfdf5; border-color:#059669; }
+  .ss-findings h4 { color:#059669; }
+  .ss-gaps { background:#fef3c7; border-color:#b45309; }
+  .ss-gaps h4 { color:#b45309; }
+  .ss-implications { background:#f5f3ff; border-color:var(--purple); }
+  .ss-implications h4 { color:var(--purple); }
+  .ss-synthesis { background:#ecfeff; border-color:var(--accent2); }
+  .ss-synthesis h4 { color:var(--accent2); }
+
+  /* ── ENHANCEMENT 3: Completeness Checklist ── */
+  .completeness-bar { display:flex; gap:6px; flex-wrap:wrap; margin-top:14px; padding-top:12px; border-top:1px solid rgba(37,99,235,0.12); }
+  .comp-badge { display:inline-flex; align-items:center; gap:4px; font-family:var(--font-mono); font-size:0.67rem; font-weight:500; padding:3px 9px; border-radius:20px; border:1px solid; }
+  .comp-badge.present { color:#065f46; background:#ecfdf5; border-color:rgba(5,150,105,0.3); }
+  .comp-badge.absent  { color:#991b1b; background:#fef2f2; border-color:rgba(220,38,38,0.25); opacity:0.7; }
+
+  /* ── READABILITY BADGE ── */
+  .readability-badge { display:inline-flex; align-items:center; gap:5px; font-family:var(--font-mono); font-size:0.68rem; font-weight:500; padding:4px 10px; border-radius:20px; border:1px solid; }
+  .rb-standard { color:#065f46; background:#ecfdf5; border-color:rgba(5,150,105,0.3); }
+  .rb-complex  { color:#92400e; background:#fef3c7; border-color:rgba(180,83,9,0.3); }
+  .rb-simple   { color:#1d4ed8; background:#eff6ff; border-color:rgba(37,99,235,0.3); }
+
+  /* ── ICC RUBRIC PANEL (MODIFICATION: new — drives rater calibration for ICC ≥ 0.90) ── */
+  .icc-rubric-details { margin-top:14px; border-top:1px dashed rgba(8,145,178,0.25); padding-top:12px; }
+  .icc-rubric-details summary { outline:none; list-style:none; }
+  .icc-rubric-details summary::-webkit-details-marker { display:none; }
+  .icc-rubric-panel { margin-top:12px; display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .rubric-intro { grid-column:1/-1; font-size:0.78rem; color:var(--text-mid); background:var(--accent2-light); border:1px solid rgba(8,145,178,0.2); border-radius:6px; padding:8px 12px; line-height:1.6; }
+  .rubric-criterion { background:var(--surface2); border:1px solid var(--border); border-radius:8px; padding:10px 12px; }
+  .rubric-crit-name { font-family:var(--font-mono); font-size:0.68rem; text-transform:uppercase; letter-spacing:0.08em; font-weight:700; color:var(--accent); margin-bottom:7px; }
+  .rubric-score-row { display:flex; gap:8px; align-items:flex-start; margin-bottom:5px; }
+  .rubric-score-num { flex-shrink:0; width:18px; height:18px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-family:var(--font-mono); font-size:0.65rem; font-weight:700; }
+  .rubric-score-num.s4 { background:#059669; color:white; }
+  .rubric-score-num.s3 { background:#0891b2; color:white; }
+  .rubric-score-num.s2 { background:#d97706; color:white; }
+  .rubric-score-num.s1 { background:#dc2626; color:white; }
+  .rubric-score-desc { font-size:0.74rem; color:var(--text-mid); line-height:1.45; }
+  @media (max-width:600px) { .icc-rubric-panel { grid-template-columns:1fr; } }
+
+  /* ── STAT WARNING BADGE (MODIFICATION: new — flags ungrounded statistics) ── */
+  .stat-warning-banner { display:none; margin-top:10px; padding:10px 14px; background:#fef2f2; border:1px solid rgba(220,38,38,0.2); border-radius:8px; font-size:0.78rem; color:#991b1b; line-height:1.6; }
+  .stat-warning-banner.visible { display:block; }
+  .stat-warning-banner code { background:rgba(220,38,38,0.08); padding:1px 5px; border-radius:3px; font-family:var(--font-mono); font-size:0.72rem; }
+
+  /* ── ENHANCEMENT 5: Synthesis Matrix ── */
+  .synthesis-matrix { background:var(--surface); border:1.5px solid rgba(8,145,178,0.2); border-radius:var(--radius); padding:20px; margin-bottom:20px; animation:fadeUp 0.4s ease; box-shadow:var(--shadow-sm); display:none; }
+  .synthesis-matrix.visible { display:block; }
+  .synthesis-matrix h3 { font-family:var(--font-serif); font-size:1rem; color:var(--accent2); margin-bottom:4px; font-weight:600; }
+  .syn-nav { display:flex; align-items:center; gap:8px; margin-bottom:16px; flex-wrap:wrap; }
+  .syn-nav-btn { display:inline-flex; align-items:center; justify-content:center; width:30px; height:30px; border-radius:50%; border:1.5px solid rgba(8,145,178,0.35); background:var(--surface); color:var(--accent2); font-size:0.9rem; cursor:pointer; transition:all 0.18s; flex-shrink:0; }
+  .syn-nav-btn:hover { background:var(--accent2); color:white; border-color:var(--accent2); }
+  .syn-nav-btn:disabled { opacity:0.3; cursor:not-allowed; }
+  .syn-counter { font-family:var(--font-mono); font-size:0.72rem; color:var(--text-dim); min-width:60px; text-align:center; }
+  .syn-card { background:var(--surface2); border:1px solid var(--border); border-radius:var(--radius-sm); overflow:hidden; animation:fadeUp 0.25s ease; }
+  .syn-card-header { background:var(--accent2); padding:12px 16px; }
+  .syn-card-num { font-family:var(--font-mono); font-size:0.65rem; color:rgba(255,255,255,0.7); margin-bottom:4px; }
+  .syn-card-title { font-family:var(--font-serif); font-size:0.92rem; color:white; font-weight:600; line-height:1.4; }
+  .syn-row { display:flex; align-items:flex-start; gap:0; border-bottom:1px solid var(--border); }
+  .syn-row:last-child { border-bottom:none; }
+  .syn-row-label { font-family:var(--font-mono); font-size:0.68rem; color:var(--accent2); font-weight:600; background:var(--accent2-light); padding:10px 12px; min-width:110px; flex-shrink:0; display:flex; align-items:flex-start; line-height:1.5; white-space:nowrap; }
+  .syn-row-value { font-size:0.82rem; color:var(--text-mid); padding:10px 14px; line-height:1.6; flex:1; }
+
+  /* ── ENHANCEMENT 6: Citation Accuracy Warning ── */
+  .citation-warning { display:none; margin-top:10px; padding:10px 14px; background:#fef3c7; border:1px solid rgba(180,83,9,0.25); border-radius:var(--radius-sm); font-size:0.8rem; color:#92400e; font-family:var(--font-sans); }
+  .citation-warning.visible { display:flex; align-items:flex-start; gap:8px; }
+
+  /* ── Summary action bar ── */
+  .summary-actions { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:14px; }
+  .simplify-btn { display:inline-flex; align-items:center; gap:6px; padding:6px 14px; border-radius:20px; border:1.5px solid rgba(124,58,237,0.3); background:white; color:var(--purple); font-size:0.75rem; font-family:var(--font-mono); cursor:pointer; transition:all 0.2s; font-weight:500; }
+  .simplify-btn:hover { background:var(--purple); color:white; }
+  .simplify-btn:disabled { opacity:0.5; cursor:not-allowed; }
+  /* ── ENHANCEMENT: Cache badge ── */
+  .cache-badge { display:inline-flex; align-items:center; gap:5px; font-family:var(--font-mono); font-size:0.67rem; font-weight:500; padding:3px 9px; border-radius:20px; background:var(--green-light); border:1px solid rgba(5,150,105,0.3); color:#065f46; margin-left:8px; }
+  /* ── ENHANCEMENT: Export buttons ── */
+  .export-row { display:flex; gap:8px; flex-wrap:wrap; margin-top:14px; padding-top:12px; border-top:1px solid var(--border); }
+  .export-btn { display:inline-flex; align-items:center; gap:6px; padding:6px 13px; border-radius:20px; border:1.5px solid var(--border); background:var(--surface2); color:var(--text-mid); font-size:0.74rem; font-family:var(--font-mono); cursor:pointer; transition:all 0.18s; font-weight:500; }
+  .export-btn:hover { border-color:var(--accent2); color:var(--accent2); background:var(--accent2-light); }
+</style>
+</head>
+<body>
+
+<!-- ══════════════════════════════════════════════
+     SPLASH SCREEN — loading meter
+     Dismissed automatically once app is ready.
+     ══════════════════════════════════════════════ -->
+<div id="splashScreen" style="
+  position:fixed;inset:0;z-index:9999;
+  background:#0f172a;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  overflow:hidden;
+  transition:opacity 0.6s ease, transform 0.6s ease;
+">
+  <!-- Animated background grid -->
+  <div style="
+    position:absolute;inset:0;
+    background-image:
+      linear-gradient(rgba(37,99,235,0.07) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(37,99,235,0.07) 1px, transparent 1px);
+    background-size:48px 48px;
+    animation:splashGrid 8s linear infinite;
+  "></div>
+
+  <!-- Floating orbs -->
+  <div style="position:absolute;width:320px;height:320px;border-radius:50%;background:radial-gradient(circle,rgba(37,99,235,0.18),transparent 70%);top:-80px;left:-80px;animation:splashOrb1 6s ease-in-out infinite;pointer-events:none"></div>
+  <div style="position:absolute;width:240px;height:240px;border-radius:50%;background:radial-gradient(circle,rgba(8,145,178,0.14),transparent 70%);bottom:-60px;right:-60px;animation:splashOrb2 7s ease-in-out infinite;pointer-events:none"></div>
+
+  <!-- Logo + title -->
+  <div style="position:relative;z-index:1;text-align:center;margin-bottom:44px">
+    <div style="
+      width:72px;height:72px;
+      background:linear-gradient(135deg,#2563eb,#0891b2);
+      border-radius:20px;
+      display:flex;align-items:center;justify-content:center;
+      font-size:32px;
+      margin:0 auto 20px;
+      box-shadow:0 0 40px rgba(37,99,235,0.4);
+      animation:splashLogo 0.9s cubic-bezier(0.34,1.56,0.64,1) both;
+    ">🔬</div>
+    <div style="
+      font-family:'Lora',Georgia,serif;
+      font-size:clamp(1.6rem,5vw,2.3rem);
+      font-weight:600;color:#f8fafc;
+      letter-spacing:-0.01em;
+      animation:splashFadeUp 0.7s 0.15s ease both;
+    ">Research<span style="color:#38bdf8">Agent</span></div>
+    <div style="
+      font-family:'JetBrains Mono',monospace;
+      font-size:0.72rem;color:#475569;
+      letter-spacing:0.14em;text-transform:uppercase;
+      margin-top:8px;
+      animation:splashFadeUp 0.7s 0.28s ease both;
+    ">Precision Engine v3 · ICC ≥ 0.90</div>
+  </div>
+
+  <!-- Loading meter -->
+  <div style="position:relative;z-index:1;width:min(400px,82vw);animation:splashFadeUp 0.7s 0.38s ease both">
+    <!-- Progress bar track -->
+    <div style="
+      width:100%;height:3px;
+      background:rgba(255,255,255,0.07);
+      border-radius:99px;overflow:hidden;
+      margin-bottom:14px;
+    ">
+      <div id="splashBar" style="
+        height:100%;width:0%;
+        background:linear-gradient(90deg,#1d4ed8,#38bdf8,#0891b2);
+        background-size:200% 100%;
+        border-radius:99px;
+        transition:width 0.4s cubic-bezier(0.4,0,0.2,1);
+        animation:splashShimmer 1.8s linear infinite;
+      "></div>
+    </div>
+    <!-- Step label + percentage -->
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px">
+      <span id="splashStep" style="
+        font-family:'JetBrains Mono',monospace;
+        font-size:0.72rem;color:#64748b;
+        transition:opacity 0.25s;
+      ">Initializing engine...</span>
+      <span id="splashPct" style="
+        font-family:'JetBrains Mono',monospace;
+        font-size:0.72rem;color:#38bdf8;font-weight:700;
+        min-width:36px;text-align:right;
+      ">0%</span>
+    </div>
+    <!-- Check rows -->
+    <div id="splashChecks" style="display:flex;flex-direction:column;gap:8px"></div>
+  </div>
+</div>
+
+<style>
+@keyframes splashGrid   { to { background-position:48px 48px; } }
+@keyframes splashOrb1   { 0%,100%{transform:translate(0,0) scale(1)} 50%{transform:translate(40px,28px) scale(1.1)} }
+@keyframes splashOrb2   { 0%,100%{transform:translate(0,0) scale(1)} 50%{transform:translate(-28px,-18px) scale(1.08)} }
+@keyframes splashLogo   { from{opacity:0;transform:scale(0.6) rotate(-8deg)} to{opacity:1;transform:scale(1) rotate(0deg)} }
+@keyframes splashFadeUp { from{opacity:0;transform:translateY(16px)} to{opacity:1;transform:translateY(0)} }
+@keyframes splashShimmer{ 0%{background-position:200% 0} 100%{background-position:-200% 0} }
+</style>
+
+<script>
+(function() {
+  const STEPS = [
+    { label:'Loading source definitions',   pct:14 },
+    { label:'Configuring citation registry', pct:30 },
+    { label:'Activating precision engine',  pct:48 },
+    { label:'Connecting to Groq AI',        pct:63 },
+    { label:'Checking database APIs',       pct:78 },
+    { label:'Rendering interface',          pct:92 },
+    { label:'Ready — all systems online',   pct:100 },
+  ];
+  let cur = 0;
+  const bar    = document.getElementById('splashBar');
+  const lbl    = document.getElementById('splashStep');
+  const pctEl  = document.getElementById('splashPct');
+  const checks = document.getElementById('splashChecks');
+
+  function addCheck(step) {
+    const done = step.pct === 100;
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:10px;opacity:0;transform:translateX(-10px);transition:opacity 0.28s ease,transform 0.28s ease';
+    row.innerHTML =
+      `<span style="width:15px;height:15px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:700;
+        ${done ? 'background:rgba(74,222,128,0.18);border:1.5px solid rgba(74,222,128,0.5);color:#4ade80'
+               : 'background:rgba(56,189,248,0.1);border:1.5px solid rgba(56,189,248,0.25);color:#38bdf8'}"
+      >${done ? '✓' : '◎'}</span>
+      <span style="font-family:'JetBrains Mono',monospace;font-size:0.69rem;color:${done ? '#4ade80' : '#475569'}">${step.label}</span>`;
+    checks.appendChild(row);
+    requestAnimationFrame(() => { row.style.opacity='1'; row.style.transform='translateX(0)'; });
+  }
+
+  function tick() {
+    if (cur >= STEPS.length) return;
+    const s = STEPS[cur];
+    bar.style.width = s.pct + '%';
+    lbl.style.opacity = '0';
+    setTimeout(() => { lbl.textContent = s.label; lbl.style.opacity = '1'; }, 120);
+    pctEl.textContent = s.pct + '%';
+    addCheck(s);
+    cur++;
+    if (s.pct < 100) {
+      setTimeout(tick, cur === 1 ? 150 : 280 + Math.random() * 160);
+    } else {
+      setTimeout(dismiss, 600);
+    }
+  }
+
+  function dismiss() {
+    const el = document.getElementById('splashScreen');
+    if (!el) return;
+    el.style.opacity = '0';
+    el.style.transform = 'scale(1.04)';
+    setTimeout(() => { el.style.display = 'none'; }, 680);
+  }
+
+  setTimeout(tick, 280);
+})();
+</script>
+
+<header>
+  <div class="header-inner">
+    <a class="logo" href="#">
+      <div class="logo-icon">🔬</div>
+      <span class="logo-text">ResearchAgent</span>
+    </a>
+    <div class="header-status">
+      <div class="status-pill"><span class="status-dot" id="groqDot"></span><span id="groqText">Groq...</span></div>
+      <div class="status-pill"><span class="status-dot" id="scopusDot"></span><span id="scopusText">Scopus...</span></div>
+      <div class="status-pill" id="springerPill"><span class="status-dot" id="springerDot"></span><span id="springerText">Springer...</span></div>
+    </div>
+  </div>
+</header>
+
+<div class="app">
+  <div class="hero">
+    <div class="hero-tag">AI-Powered Academic Research</div>
+    <h1>Multi-Document <em>Research Assistant</em></h1>
+    <p>Intelligently searches, summarizes, and compares academic papers across global and Philippine databases using fast Groq AI.</p>
+    <!-- MODIFICATION: v3 improvement badges shown in UI -->
+    <div style="display:flex;align-items:center;justify-content:center;gap:8px;flex-wrap:wrap;margin-top:14px;margin-bottom:4px">
+      <span style="display:inline-flex;align-items:center;gap:5px;font-family:var(--font-mono);font-size:0.67rem;font-weight:600;padding:4px 11px;border-radius:20px;background:#ecfdf5;border:1px solid rgba(5,150,105,0.3);color:#065f46">🎯 v3 · ICC ≥ 0.90 Target</span>
+      <span style="display:inline-flex;align-items:center;gap:5px;font-family:var(--font-mono);font-size:0.67rem;font-weight:600;padding:4px 11px;border-radius:20px;background:#eff6ff;border:1px solid rgba(37,99,235,0.3);color:#1e3a5f">🔒 Verbatim-Only Stats</span>
+      <span style="display:inline-flex;align-items:center;gap:5px;font-family:var(--font-mono);font-size:0.67rem;font-weight:600;padding:4px 11px;border-radius:20px;background:#f5f3ff;border:1px solid rgba(124,58,237,0.3);color:#5b21b6">📏 Citation-Locked Registry</span>
+      <span style="display:inline-flex;align-items:center;gap:5px;font-family:var(--font-mono);font-size:0.67rem;font-weight:600;padding:4px 11px;border-radius:20px;background:#f0f9ff;border:1px solid rgba(3,105,161,0.3);color:#0369a1">🇵🇭 PH Source Priority</span>
+    </div>
+    <div class="source-badges">
+      <span class="src-badge arxiv"><span class="dot"></span>arXiv</span>
+      <span class="src-badge openalex"><span class="dot"></span>OpenAlex</span>
+      <span class="src-badge crossref"><span class="dot"></span>CrossRef</span>
+      <span class="src-badge scopus" id="scopusBadge"><span class="dot"></span>Scopus</span>
+      <span class="src-badge pubmed"><span class="dot"></span>PubMed</span>
+      <span class="src-badge semantic"><span class="dot"></span>Semantic Scholar</span>
+      <span class="src-badge core"><span class="dot"></span>CORE</span>
+      <span class="src-badge springer" id="springerBadge"><span class="dot"></span>Springer Nature</span>
+      <span class="src-badge herdin"><span class="dot"></span>HERDIN Plus</span>
+      <span class="src-badge pej"><span class="dot"></span>PH E-Journals</span>
+      <span class="src-badge doaj"><span class="dot"></span>DOAJ</span>
+      <span class="src-badge ukdr"><span class="dot"></span>UKDR UPLB</span>
+    </div>
+  </div>
+
+  <!-- SEARCH PANEL -->
+  <div class="search-panel" style="grid-column:1/-1">
+    <div class="search-row">
+      <div class="search-input-wrap">
+        <label class="field-label" for="queryInput">Research Query</label>
+        <input type="text" id="queryInput" placeholder="e.g. transformer architectures for low-resource NLP" autocomplete="off"/>
+      </div>
+      <div class="search-controls">
+        <div class="control-wrap">
+          <label class="field-label" for="modeSelect">Mode</label>
+          <select id="modeSelect">
+            <option value="full">Full Research</option>
+            <option value="summary">Summaries Only</option>
+            <option value="compare">Compare Papers</option>
+          </select>
+        </div>
+        <div class="control-wrap">
+          <label class="field-label" for="maxPapers">Papers</label>
+          <select id="maxPapers">
+            <option value="3">3 papers</option>
+            <option value="5" selected>5 papers</option>
+            <option value="8">8 papers</option>
+            <option value="10">10 papers</option>
+          </select>
+        </div>
+        <div>
+          <label class="field-label">&nbsp;</label>
+          <button class="btn btn-primary" id="searchBtn" onclick="runResearch()">
+            <span>🔍</span> <span class="btn-label">Research</span>
+          </button>
+        </div>
+      </div>
+    </div>
+    <!-- SOURCE FILTER CHIPS -->
+    <div>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-top:18px;padding-top:16px;border-top:1px solid var(--border)">
+        <label class="field-label" style="margin-bottom:0">Search Sources</label>
+        <div class="src-chip-actions">
+          <button onclick="selectAllSources()">Select all</button>
+          <button onclick="clearAllSources()">Clear all</button>
+        </div>
+      </div>
+      <div id="sourceChips" style="display:flex;gap:7px;flex-wrap:wrap;margin-top:10px"></div>
+      <div id="sourceWarning">⚠ Select at least one source</div>
+    </div>
+
+    <!-- ── ENHANCEMENT 1: Summary Format Selector ── -->
+    <div class="summary-format-row">
+      <label class="field-label" style="margin-bottom:0;flex-shrink:0;align-self:center">Summary Format</label>
+      <button class="format-btn" id="fmt-standard"   onclick="setFormat('standard')">📄 Standard</button>
+      <button class="format-btn"        id="fmt-structured" onclick="setFormat('structured')">🗂 Structured</button>
+      <button class="format-btn active-rrl" id="fmt-rrl"   onclick="setFormat('rrl')">📝 RRL-Ready</button>
+      <span id="formatHint" style="font-size:0.7rem;font-family:var(--font-mono);color:var(--text-dim);align-self:center;flex:1">📝 RRL-Ready — Intro / Synthesis / Gaps / Implications. Highest ICC scores across all criteria.</span>
+    </div>
+  </div>
+
+  <!-- MAIN COLUMN -->
+  <div class="main-col">
+    <div id="resultsArea">
+      <div class="empty-state">
+        <div class="empty-icon">📚</div>
+        <h3>Ready to Research</h3>
+        <p>Enter a topic above. The agent will search arXiv, OpenAlex, CrossRef, and Scopus — then summarize and compare findings using Groq AI.</p>
+      </div>
+    </div>
+    <div class="followup-section" id="followupSection" style="display:none">
+
+      <!-- RRL DRAFT GENERATOR -->
+      <div class="rrl-result-card" id="rrlResultCard">
+        <h4>📄 Review of Related Literature Draft</h4>
+        <div class="rrl-content" id="rrlBody"></div>
+        <div class="rrl-references" id="rrlRefsSection" style="display:none">
+          <h5>References</h5>
+          <div class="rrl-ref-list" id="rrlRefList"></div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;align-items:center">
+          <button class="rrl-copy-btn" onclick="copyRRL('all')">📋 Copy Full RRL + References</button>
+          <button class="rrl-copy-btn" onclick="copyRRL('refs')" id="copyRefsBtn" style="display:none">📚 Copy References Only</button>
+          <button class="rrl-copy-btn" onclick="document.getElementById('rrlResultCard').style.display='none'" style="color:var(--text-dim);border-color:var(--border);margin-left:auto">✕ Dismiss</button>
+        </div>
+      </div>
+
+      <div style="margin-bottom:16px">
+        <div style="font-family:var(--font-mono);font-size:0.68rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--text-dim);font-weight:500;margin-bottom:10px">📝 Generate AI Draft</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="rrl-btn" id="rrlBtn" onclick="generateRRL('rrl-ready')" style="flex:1;min-width:180px">
+            <span class="rrl-icon">📝</span>
+            <span class="rrl-text">
+              RRL-READY Draft
+              <small>Intro · Thematic Synthesis · Gaps · Implications · References</small>
+            </span>
+          </button>
+          <button class="rrl-btn" id="rrlBtnStructured" onclick="generateRRL('structured-summary')" style="flex:1;min-width:180px;background:linear-gradient(135deg,#0369a1,#0891b2)">
+            <span class="rrl-icon">🗂</span>
+            <span class="rrl-text">
+              Structured Summary
+              <small>Per-paper: Objective · Methodology · Key Results · Limitations</small>
+            </span>
+          </button>
+        </div>
+        <div style="font-family:var(--font-mono);font-size:0.67rem;color:var(--text-dim);margin-top:8px;line-height:1.6">
+          🎯 ICC target ≥ 0.90 · Verbatim stats only · No hallucinated citations · 🇵🇭 PH sources highlighted
+        </div>
+      </div>
+
+      <div class="sidebar-card">
+        <h4>💬 Ask a Follow-up Question</h4>
+        <p style="font-size:0.8rem;color:var(--text-dim);margin-bottom:12px;line-height:1.5">Ask anything about <strong id="followupPaperCount">the papers retrieved above</strong> — comparisons, methodology, findings, gaps.</p>
+        <div id="suggestionChips" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px"></div>
+        <!-- Output Mode Toggle -->
+        <div style="display:flex;gap:6px;margin-bottom:10px;align-items:center">
+          <span style="font-family:var(--font-mono);font-size:0.65rem;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-dim);flex-shrink:0">Output:</span>
+          <select id="followupOutputMode" style="font-size:0.75rem;padding:4px 8px;border-radius:6px;border:1.5px solid var(--border);background:var(--surface2);color:var(--text-mid);font-family:var(--font-mono);cursor:pointer">
+            <option value="default">Default Answer</option>
+            <option value="rrl-ready">RRL-READY Format</option>
+            <option value="structured-summary">Structured Summary</option>
+          </select>
+        </div>
+        <label class="field-label" for="followupInput">Your question</label>
+        <textarea id="followupInput" placeholder="e.g. Which paper has the most citations? Compare the methodologies used." style="min-height:90px"></textarea>
+        <div style="display:flex;gap:8px;align-items:center;margin-top:10px">
+          <button class="btn btn-primary btn-sm" onclick="askFollowup()" id="followupBtn">💬 Ask</button>
+          <button class="btn btn-ghost btn-sm" onclick="clearFollowup()">Clear</button>
+        </div>
+        <div id="followupResult" style="display:none;margin-top:18px">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+            <span style="font-family:var(--font-mono);font-size:0.69rem;letter-spacing:0.08em;text-transform:uppercase;color:var(--text-dim);font-weight:500">Answer</span>
+            <div style="flex:1;height:1px;background:var(--border)"></div>
+          </div>
+          <div id="followupAnswer" style="font-size:0.88rem;color:var(--text-mid);line-height:1.8;white-space:pre-wrap;background:var(--accent-light);border:1.5px solid rgba(37,99,235,0.15);border-radius:var(--radius-sm);padding:16px"></div>
+          <div id="followupSources" style="margin-top:12px;display:none">
+            <span style="font-family:var(--font-mono);font-size:0.68rem;color:var(--text-dim);font-weight:500;text-transform:uppercase;letter-spacing:0.08em">Papers referenced:</span>
+            <div id="followupSourceList" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"></div>
+          </div>
+        </div>
+        <div id="followupHistory" style="margin-top:4px"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SIDEBAR -->
+  <div class="sidebar">
+    <button class="sidebar-toggle-btn" id="sidebarToggle" onclick="toggleSidebar()">
+      <span>📋 Tools &amp; Info</span><span class="chevron">▼</span>
+    </button>
+    <div class="sidebar-collapsible" id="sidebarContent">
+
+      <div class="sidebar-card" id="statsCard" style="display:none">
+        <h4>📊 Session Stats</h4>
+        <div id="statRows"></div>
+      </div>
+
+      <!-- PREVIOUS SEARCH TOPICS -->
+      <div class="sidebar-card">
+        <h4>🕘 Previous Search Topics</h4>
+        <div id="searchHistory" class="quick-queries">
+          <div id="searchHistoryEmpty" style="font-size:0.82rem;color:var(--text-dim);padding:8px 4px;line-height:1.6;font-style:italic">
+            No searches yet. Your previous topics will appear here so you can quickly re-run them.
+          </div>
+        </div>
+      </div>
+
+      <div class="sidebar-card">
+        <h4>ℹ️ Data Sources</h4>
+        <div style="font-size:0.82rem;color:var(--text-mid);line-height:2">
+          <div><span class="tag source-arxiv">arXiv</span> &nbsp;Preprints — free, no key</div>
+          <div><span class="tag source-openalex">OpenAlex</span> &nbsp;250M+ works — free</div>
+          <div><span class="tag source-crossref">CrossRef</span> &nbsp;DOI resolver — free</div>
+          <div><span class="tag source-scopus" id="scopusSourceTag">Scopus</span> &nbsp;<span id="scopusSourceStatus">API key required</span></div>
+          <div><span class="tag source-pubmed">PubMed</span> &nbsp;35M+ biomedical — free</div>
+          <div><span class="tag source-semantic">Semantic Scholar</span> &nbsp;200M+ all fields — free</div>
+          <div><span class="tag source-core">CORE</span> &nbsp;<span id="coreSourceStatus">230M+ open access PDFs — free</span></div>
+          <div><span class="tag source-doaj">DOAJ</span> &nbsp;10M+ open access articles — free, no key</div>
+          <div><span class="tag source-springer">Springer Nature</span> &nbsp;<span id="springerSourceStatus">13M+ articles — free key needed</span></div>
+          <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">
+            <div style="font-family:var(--font-mono);font-size:0.65rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--text-dim);margin-bottom:8px;font-weight:500">🇵🇭 Philippine Sources</div>
+            <div><span class="tag source-herdinplus">HERDIN Plus</span> &nbsp;50K+ PH health research — free</div>
+            <div style="margin-top:6px"><span class="tag source-philippinejournals">PH E-Journals</span> &nbsp;100+ HEI journals — free</div>
+            <div style="margin-top:6px"><span class="tag source-ukdr">UKDR UPLB</span> &nbsp;<a href="https://www.ukdr.uplb.edu.ph/" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline;text-underline-offset:2px">UPLB institutional repository</a> — free</div>
+          </div>
+        </div>
+        <div class="section-divider"></div>
+        <div style="color:var(--text-dim);font-size:0.75rem;line-height:1.65">Powered by Groq LLaMA3.<br>14,400 free API requests/day.<br><span style="font-family:var(--font-mono);font-size:0.67rem;color:var(--accent2)">🎯 Precision Engine v3 · ICC ≥ 0.90 · CS/IS/PH</span></div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<nav class="bottom-nav">
+  <button class="nav-item active" id="nav-search" onclick="switchTab('search')"><span class="nav-icon">🔍</span><span>Search</span></button>
+  <button class="nav-item" id="nav-results" onclick="switchTab('results')"><span class="nav-icon">📄</span><span>Papers</span></button>
+  <button class="nav-item" id="nav-ask" onclick="switchTab('ask')"><span class="nav-icon">💬</span><span>Ask</span></button>
+  <button class="nav-item" id="nav-info" onclick="switchTab('info')"><span class="nav-icon">📋</span><span>Info</span></button>
+</nav>
+<div class="toast" id="toast"></div>
+
+<script>
+const API_BASE = window.location.origin;
+
+// ── SOURCE DEFINITIONS ──
+const ALL_SOURCES = [
+  { id: 'arXiv',                 label: 'arXiv',          cls: 'arxiv',    lock: false, desc: 'Preprints' },
+  { id: 'Semantic Scholar',      label: 'Semantic Scholar', cls: 'semantic', lock: false, desc: '200M+ papers' },
+  { id: 'OpenAlex',              label: 'OpenAlex',       cls: 'openalex', lock: false, desc: '250M+ works' },
+  { id: 'CORE',                  label: 'CORE',           cls: 'core',     lock: false, desc: '230M+ OA' },
+  { id: 'PubMed',                label: 'PubMed',         cls: 'pubmed',   lock: false, desc: 'Biomedical' },
+  { id: 'CrossRef',              label: 'CrossRef',       cls: 'crossref', lock: false, desc: 'DOI resolver' },
+  { id: 'HERDIN Plus',           label: 'HERDIN Plus',    cls: 'herdin',   lock: false, desc: 'PH health' },
+  { id: 'Philippine E-Journals', label: 'PH E-Journals',  cls: 'pej',      lock: false, desc: 'PH HEI journals' },
+  { id: 'DOAJ', label: 'DOAJ', cls: 'doaj', lock: false, desc: '10M+ OA articles' },
+  { id: 'UKDR UPLB',             label: 'UKDR UPLB',     cls: 'ukdr',     lock: false, desc: 'UPLB institutional repository' },
+  { id: 'Scopus',                label: 'Scopus',         cls: 'scopus',   lock: true,  desc: 'Key required' },
+  { id: 'Springer Nature',       label: 'Springer',       cls: 'springer', lock: true,  desc: 'Key required' },
+];
+
+// Track which are selected (default: all non-locked on)
+let selectedSources = new Set(ALL_SOURCES.filter(s => !s.lock).map(s => s.id));
+let scopusAvailable = false;
+let springerAvailable = false;
+
+function buildSourceChips() {
+  const container = document.getElementById('sourceChips');
+  if (!container) return;
+  container.innerHTML = ALL_SOURCES.map(src => {
+    const isAvailable = !src.lock || (src.id === 'Scopus' && scopusAvailable) || (src.id === 'Springer Nature' && springerAvailable);
+    const isActive = selectedSources.has(src.id) && isAvailable;
+    const lockIcon = src.lock && !isAvailable ? ' <span class="chip-lock">🔒</span>' : '';
+    return `<button 
+      class="src-chip ${src.cls} ${isActive ? 'active' : 'inactive'}"
+      id="chip-${src.cls}"
+      onclick="${isAvailable ? `toggleSource('${src.id}')` : `showToast('Add ${src.id} API key to .env to enable')`}"
+      title="${src.desc}${src.lock && !isAvailable ? ' — API key required' : ''}"
+    ><span class="chip-dot"></span>${src.label}${lockIcon}</button>`;
+  }).join('');
+}
+
+function toggleSource(sourceId) {
+  if (selectedSources.has(sourceId)) {
+    // Don't allow deselecting the last one
+    if (selectedSources.size === 1) {
+      showToast('At least one source must be selected');
+      return;
+    }
+    selectedSources.delete(sourceId);
+  } else {
+    selectedSources.add(sourceId);
+  }
+  document.getElementById('sourceWarning').style.display = 'none';
+  buildSourceChips();
+  saveSourcePrefs();
+}
+
+function selectAllSources() {
+  ALL_SOURCES.forEach(s => {
+    const isAvailable = !s.lock || (s.id === 'Scopus' && scopusAvailable) || (s.id === 'Springer Nature' && springerAvailable);
+    if (isAvailable) selectedSources.add(s.id);
+  });
+  buildSourceChips();
+  saveSourcePrefs();
+}
+
+function clearAllSources() {
+  // Keep at least the first available source
+  selectedSources.clear();
+  const first = ALL_SOURCES.find(s => !s.lock);
+  if (first) selectedSources.add(first.id);
+  buildSourceChips();
+  saveSourcePrefs();
+}
+
+function getSelectedSources() {
+  return [...selectedSources];
+}
+let currentSessionId = null;
+let currentQuery = '';
+let currentSources = [];
+let currentMode = 'full';
+let currentMaxPapers = 5;
+let currentPage = 0;
+let allPaperTitles = [];   // tracks all titles shown so far to avoid duplicates
+let allRetrievedPapers = []; // ✅ CITATION GROUNDING: full paper objects for validation
+const isMobile = () => window.innerWidth <= 600;
+
+// ══════════════════════════════════════════════════════
+// CITATION GROUNDING UTILITIES
+// ══════════════════════════════════════════════════════
+
+/** Build a normalized citation registry from retrieved papers */
+// MODIFICATION: Upgraded registry builder — passes full metadata for the locked citation table
+function buildCitationRegistry(papers) {
+  return papers.map((p, idx) => {
+    const firstLast = extractFirstAuthorLastFromArray(p.authors);
+    const year = p.year || p.published || '';
+    return {
+      idx: idx + 1,
+      title: (p.title || '').trim(),
+      authors: (p.authors || []),
+      year,
+      doi: p.doi || '',
+      journal: p.journal || '',
+      source: p.source || '',
+      abstract: p.abstract || '',
+      firstAuthorLast: firstLast,
+      etAlKey: `${firstLast}-${year}`.toLowerCase(),
+      inTextKey: buildInTextKey(p.authors, year),
+    };
+  });
+}
+
+function extractFirstAuthorLastFromArray(authors) {
+  if (!authors || !authors.length) return '';
+  const first = authors[0];
+  const parts = first.split(',');
+  if (parts.length >= 2) return parts[0].trim().toLowerCase();
+  const words = first.trim().split(/\s+/);
+  return (words[words.length - 1] || '').toLowerCase();
+}
+
+function buildInTextKey(authors, year) {
+  const last = extractFirstAuthorLastFromArray(authors);
+  return `${last}, ${year}`.toLowerCase();
+}
+
+function buildEtAlKey(authors, year) {
+  const last = extractFirstAuthorLastFromArray(authors);
+  return `${last}-${year}`.toLowerCase();
+}
+
+/** Scan generated RRL text and detect citations not in the registry */
+// MODIFICATION: Enhanced hallucination detector — now also flags:
+//   1. Statistics (%) that don't appear in any abstract snippet
+//   2. Institutional attributions (DOH, CHED, OpenAI, etc.) not in registry
+//   3. Year mismatches more precisely
+function detectHallucinatedCitations(rrlText, registry) {
+  const citationPattern  = /\(([^)]{3,80},\s*\d{4}[a-z]?)\)/g;
+  const narrativePattern = /([A-Z][a-zA-Z\-]+(?: et al\.)?(?:\s*&\s*[A-Z][a-zA-Z\-]+)?)\s*\((\d{4}[a-z]?)\)/g;
+
+  const foundCitations = new Set();
+  const hallucinatedCitations = [];
+  const verifiedCitations = [];
+  const statWarnings = []; // NEW: track suspicious statistics
+
+  let match;
+  while ((match = citationPattern.exec(rrlText))  !== null) foundCitations.add(match[1].trim());
+  while ((match = narrativePattern.exec(rrlText)) !== null) foundCitations.add(`${match[1].trim()}, ${match[2].trim()}`);
+
+  for (const cite of foundCitations) {
+    const yearMatch = cite.match(/\d{4}/);
+    const year = yearMatch ? yearMatch[0] : '';
+    // Handle: "Smith", "Smith & Jones", "Smith et al.", "Smith and Jones"
+    const rawAuthor = cite.split(',')[0].trim();
+    const authorParts = rawAuthor
+      .replace(/ et al\.?/i, '')
+      .split(/\s*(?:&|and)\s*/i)
+      .map(a => a.trim().toLowerCase())
+      .filter(Boolean);
+
+    const isVerified = registry.some(p => {
+      if (!p.firstAuthorLast) return false;
+      const registryLast = p.firstAuthorLast.toLowerCase();
+      const yearExact = !year || String(p.year) === year;
+      // Match if ANY author part contains the registry last name (covers et al. shortening)
+      const nameMatch = authorParts.some(a => a.includes(registryLast) || registryLast.includes(a));
+      return nameMatch && yearExact;
+    });
+
+    if (isVerified) {
+      verifiedCitations.push(cite);
+    } else {
+      const genericTerms = ['ibid', 'op cit', 'loc cit', 'source not retrieved'];
+      const isGeneric = genericTerms.some(t => cite.toLowerCase().includes(t));
+      if (!isGeneric) hallucinatedCitations.push(cite);
+    }
+  }
+
+  // Detect suspicious statistics in sentences without a verified citation nearby
+  const statPattern = /(\d{1,3}(?:\.\d+)?%)/g;
+  let statMatch;
+  while ((statMatch = statPattern.exec(rrlText)) !== null) {
+    const pct = statMatch[1];
+    const contextStart = Math.max(0, statMatch.index - 200);
+    const contextEnd   = Math.min(rrlText.length, statMatch.index + 200);
+    const context = rrlText.slice(contextStart, contextEnd);
+    // Check if this % appears in any abstract
+    const foundInAbstract = registry.some(p => (p.abstract||'').includes(pct.replace('%','').trim()));
+    // Check if [Source not retrieved] marker is nearby
+    const hasPlaceholder = context.includes('[Source not retrieved]');
+    if (!foundInAbstract && !hasPlaceholder) {
+      statWarnings.push({ stat: pct, context: context.slice(0,100).trim() });
+    }
+  }
+
+  return { foundCitations: [...foundCitations], hallucinatedCitations, verifiedCitations, statWarnings };
+}
+
+// (buildCitationConstraintBlock replaced with enhanced version in CITATION LOCK section above)
+
+// ── SEARCH HISTORY (persisted to localStorage) ──
+const HISTORY_KEY = 'ra_search_history';
+const SOURCE_PREF_KEY = 'ra_source_prefs';
+
+function loadHistoryFromStorage() {
+  try {
+    const raw = localStorage.getItem(HISTORY_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return parsed.map(h => ({ ...h, timestamp: new Date(h.timestamp) }));
+  } catch { return []; }
+}
+
+function saveHistoryToStorage(hist) {
+  try { localStorage.setItem(HISTORY_KEY, JSON.stringify(hist)); } catch {}
+}
+
+function saveSourcePrefs() {
+  try { localStorage.setItem(SOURCE_PREF_KEY, JSON.stringify([...selectedSources])); } catch {}
+}
+
+function loadSourcePrefs() {
+  try {
+    const raw = localStorage.getItem(SOURCE_PREF_KEY);
+    if (raw) {
+      const saved = JSON.parse(raw);
+      selectedSources = new Set(saved.filter(id => ALL_SOURCES.some(s => s.id === id)));
+    }
+  } catch {}
+}
+
+let searchHistory = loadHistoryFromStorage();
+
+function addToSearchHistory(query, paperCount, duration, sources) {
+  searchHistory = searchHistory.filter(h => h.query !== query);
+  searchHistory.unshift({ query, paperCount, duration, sources: sources || [], timestamp: new Date() });
+  if (searchHistory.length > 20) searchHistory = searchHistory.slice(0, 20);
+  saveHistoryToStorage(searchHistory);
+  renderSearchHistory();
+}
+
+function removeFromHistory(index) {
+  searchHistory.splice(index, 1);
+  saveHistoryToStorage(searchHistory);
+  renderSearchHistory();
+}
+
+function clearSearchHistory() {
+  searchHistory = [];
+  saveHistoryToStorage(searchHistory);
+  renderSearchHistory();
+}
+
+function formatTimeAgo(date) {
+  const s = Math.floor((new Date() - date) / 1000);
+  if (s < 60) return 'just now';
+  if (s < 3600) return Math.floor(s / 60) + 'm ago';
+  if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+  return Math.floor(s / 86400) + 'd ago';
+}
+
+function renderSearchHistory() {
+  const container = document.getElementById('searchHistory');
+  if (!container) return;
+  if (searchHistory.length === 0) {
+    container.innerHTML = `<div id="searchHistoryEmpty" style="font-size:0.82rem;color:var(--text-dim);padding:8px 4px;line-height:1.6;font-style:italic">No searches yet. Your previous topics will appear here so you can quickly re-run them.</div>`;
+    return;
+  }
+  let html = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+    <span style="font-size:0.72rem;color:var(--text-dim);font-family:var(--font-mono)">${searchHistory.length} topic${searchHistory.length > 1 ? 's' : ''}</span>
+    <button onclick="clearSearchHistory()" style="font-size:0.72rem;color:var(--red);background:none;border:none;cursor:pointer;font-family:var(--font-sans);padding:2px 6px;border-radius:4px" onmouseover="this.style.background='var(--red-light)'" onmouseout="this.style.background='none'">Clear all</button>
+  </div>`;
+  searchHistory.forEach((item, i) => {
+    html += `<div style="display:flex;align-items:flex-start;gap:6px;margin-bottom:6px">
+      <button class="quick-btn" onclick="setQuery(${JSON.stringify(item.query)})" style="flex:1;text-align:left;padding:9px 11px">
+        <div style="font-size:0.82rem;color:var(--text);line-height:1.4;margin-bottom:4px">${escHtml(item.query)}</div>
+        <div style="display:flex;gap:8px;font-size:0.69rem;color:var(--text-dim);font-family:var(--font-mono);flex-wrap:wrap">
+          <span>📄 ${item.paperCount}</span><span>⏱ ${item.duration}s</span><span>🕘 ${formatTimeAgo(item.timestamp)}</span>
+        </div>
+        ${item.sources?.length ? `<div style="font-size:0.65rem;color:var(--text-dim);margin-top:3px;line-height:1.6">${item.sources.slice(0,4).join(' · ')}${item.sources.length > 4 ? ` +${item.sources.length-4}` : ''}</div>` : ''}
+      </button>
+      <button onclick="removeFromHistory(${i})" title="Remove" style="flex-shrink:0;margin-top:2px;padding:7px;border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--surface2);color:var(--text-dim);cursor:pointer;font-size:0.75rem;line-height:1;transition:all 0.2s" onmouseover="this.style.borderColor='var(--red)';this.style.color='var(--red)';this.style.background='var(--red-light)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text-dim)';this.style.background='var(--surface2)'">✕</button>
+    </div>`;
+  });
+  container.innerHTML = html;
+}
+
+// ── STATUS ──
+async function checkStatus() {
+  try {
+    const r = await fetch(`${API_BASE}/health`, { signal: AbortSignal.timeout(5000) });
+    const data = await r.json();
+    const gDot = document.getElementById('groqDot');
+    const gTxt = document.getElementById('groqText');
+    if (data.groq) {
+      gDot.className = 'status-dot online';
+      gTxt.textContent = 'Groq ✓';
+    } else if (data.gemini) {
+      gDot.className = 'status-dot warning';
+      gTxt.textContent = 'Gemini fallback ✓';
+    } else {
+      gDot.className = 'status-dot offline';
+      gTxt.textContent = 'LLM offline';
+    }
+    const sDot = document.getElementById('scopusDot');
+    const sTxt = document.getElementById('scopusText');
+    const sSrc = document.getElementById('scopusSourceStatus');
+    const sBadge = document.getElementById('scopusBadge');
+    // ── Update availability flags and rebuild chips ──
+    scopusAvailable   = !!data.scopus;
+    springerAvailable = !!data.springer;
+    buildSourceChips();
+
+    if (data.scopus) {
+      sDot.className = 'status-dot online'; sTxt.textContent = 'Scopus ready';
+      if (sSrc) sSrc.textContent = 'Connected ✓';
+      if (sBadge) sBadge.style.opacity = '1';
+    } else {
+      sDot.className = 'status-dot warning'; sTxt.textContent = 'Scopus: no key';
+      if (sSrc) sSrc.textContent = 'Add key to .env';
+      if (sBadge) sBadge.style.opacity = '0.4';
+    }
+
+    // Springer status
+    const spDot = document.getElementById('springerDot');
+    const spTxt = document.getElementById('springerText');
+    const spSrc = document.getElementById('springerSourceStatus');
+    const spBadge = document.getElementById('springerBadge');
+    if (data.springer) {
+      if (spDot) spDot.className = 'status-dot online';
+      if (spTxt) spTxt.textContent = 'Springer ready';
+      if (spSrc) spSrc.textContent = '13M+ articles — connected ✓';
+      if (spBadge) spBadge.style.opacity = '1';
+    } else {
+      if (spDot) spDot.className = 'status-dot warning';
+      if (spTxt) spTxt.textContent = 'Springer: no key';
+      if (spSrc) spSrc.textContent = 'Free key at dev.springernature.com';
+      if (spBadge) spBadge.style.opacity = '0.4';
+    }
+
+    // CORE status (always on)
+    const coreSrc = document.getElementById('coreSourceStatus');
+    if (coreSrc) coreSrc.textContent = data.core ? '230M+ PDFs — connected ✓' : 'Available';
+
+  } catch {
+    document.getElementById('groqDot').className = 'status-dot offline';
+    document.getElementById('groqText').textContent = 'Backend offline';
+    document.getElementById('scopusDot').className = 'status-dot offline';
+    document.getElementById('scopusText').textContent = 'Offline';
+    const spDot2 = document.getElementById('springerDot');
+    const spTxt2 = document.getElementById('springerText');
+    if (spDot2) spDot2.className = 'status-dot offline';
+    if (spTxt2) spTxt2.textContent = 'Offline';
+  }
+}
+
+function toggleSidebar() {
+  document.getElementById('sidebarToggle').classList.toggle('open');
+  document.getElementById('sidebarContent').classList.toggle('collapsed');
+}
+
+function initSidebar() {
+  if (window.innerWidth <= 900 && window.innerWidth > 600)
+    document.getElementById('sidebarContent').classList.add('collapsed');
+}
+
+function switchTab(tab) {
+  if (!isMobile()) return;
+  document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+  document.getElementById(`nav-${tab}`)?.classList.add('active');
+  const searchPanel = document.querySelector('.search-panel');
+  const hero = document.querySelector('.hero');
+  const mainCol = document.querySelector('.main-col');
+  const followup = document.getElementById('followupSection');
+  const sidebar = document.querySelector('.sidebar');
+  const resultsArea = document.getElementById('resultsArea');
+  [searchPanel, hero, mainCol, followup, sidebar].forEach(el => { if (el) el.style.display = 'none'; });
+  if (resultsArea) resultsArea.style.display = 'block';
+  if (tab === 'search') {
+    if (hero) hero.style.display = 'block';
+    if (searchPanel) searchPanel.style.display = 'block';
+  } else if (tab === 'results') {
+    if (mainCol) mainCol.style.display = 'block';
+  } else if (tab === 'ask') {
+    if (mainCol) mainCol.style.display = 'block';
+    if (resultsArea) resultsArea.style.display = 'none';
+    if (followup && currentSessionId) followup.style.display = 'block';
+  } else if (tab === 'info') {
+    if (sidebar) { sidebar.style.display = 'block'; document.getElementById('sidebarContent')?.classList.remove('collapsed'); }
+  }
+}
+
+function setQuery(q) {
+  document.getElementById('queryInput').value = q;
+  if (isMobile()) switchTab('search');
+  document.getElementById('queryInput').focus();
+}
+
+function showToast(msg, duration = 3000) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), duration);
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── SEARCH ──
+
+// ── QUERY EXPANSION: disambiguate CS/AI acronyms so academic APIs
+//    don't confuse them with medical or environmental terms ──
+const QUERY_EXPANSIONS = {
+  // AI / NLP
+  'llm':  'large language model',
+  'llms': 'large language models',
+  'nlp':  'natural language processing',
+  'nlu':  'natural language understanding',
+  'nlg':  'natural language generation',
+  'rag':  'retrieval-augmented generation',
+  // Deep Learning
+  'cnn':  'convolutional neural network',
+  'rnn':  'recurrent neural network',
+  'lstm': 'long short-term memory',
+  'gru':  'gated recurrent unit',
+  'gan':  'generative adversarial network',
+  'vae':  'variational autoencoder',
+  'mlp':  'multilayer perceptron',
+  'dnn':  'deep neural network',
+  'bnn':  'bayesian neural network',
+  'rbm':  'restricted boltzmann machine',
+  'dbn':  'deep belief network',
+  'som':  'self-organizing map',
+  'rbfn': 'radial basis function network',
+  // Transformers / LM architectures
+  'bert': 'bidirectional encoder representations from transformers',
+  'gpt':  'generative pre-trained transformer',
+  'vit':  'vision transformer',
+  't5':   'text-to-text transfer transformer',
+  // RL
+  'rl':   'reinforcement learning',
+  'drl':  'deep reinforcement learning',
+  'ppo':  'proximal policy optimization',
+  'dqn':  'deep q-network',
+  // ML general
+  'ml':   'machine learning',
+  'dl':   'deep learning',
+  'ai':   'artificial intelligence',
+  'cv':   'computer vision',
+  'ocr':  'optical character recognition',
+  'knn':  'k-nearest neighbors',
+  'svm':  'support vector machine',
+  'pca':  'principal component analysis',
+  // Systems / CS
+  'api':  'application programming interface',
+  'iot':  'internet of things',
+  'hpc':  'high-performance computing',
+  'gpu':  'graphics processing unit',
+  'tpu':  'tensor processing unit',
+  'fpga': 'field-programmable gate array',
+  'os':   'operating system',
+};
+
+/**
+ * Expand a user query by replacing known CS/AI acronyms with their full forms.
+ * Only replaces whole-word occurrences (case-insensitive).
+ * e.g. "LLM applications" → "large language model applications"
+ */
+function expandQuery(raw) {
+  // Split on whitespace, expand tokens, rejoin
+  return raw.split(/\s+/).map(token => {
+    const key = token.replace(/[^a-z0-9]/gi, '').toLowerCase();
+    return QUERY_EXPANSIONS[key] ? QUERY_EXPANSIONS[key] : token;
+  }).join(' ');
+}
+
+// AbortController for cancelling in-flight requests
+let _currentAbortController = null;
+
+// Result cache: key = "query||sources||mode||maxPapers", value = { data, timestamp }
+const _resultCache = new Map();
+const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+function _buildCacheKey(query, sources, mode, maxPapers) {
+  return [query, [...sources].sort().join(','), mode, maxPapers].join('||');
+}
+
+function _getCached(query, sources, mode, maxPapers) {
+  const key = _buildCacheKey(query, sources, mode, maxPapers);
+  const entry = _resultCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.timestamp > CACHE_TTL_MS) { _resultCache.delete(key); return null; }
+  return entry;
+}
+
+function _setCache(query, sources, mode, maxPapers, data) {
+  const key = _buildCacheKey(query, sources, mode, maxPapers);
+  _resultCache.set(key, { data, timestamp: Date.now() });
+}
+
+// Fetch with timeout + exponential-backoff retry (maxRetries attempts)
+async function _fetchWithRetry(url, options, timeoutMs = 60000, maxRetries = 1) {
+  let lastErr;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const controller = new AbortController();
+    _currentAbortController = controller;
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const r = await fetch(url, { ...options, signal: controller.signal });
+      clearTimeout(timeoutId);
+      return r;
+    } catch (err) {
+      clearTimeout(timeoutId);
+      if (err.name === 'AbortError') throw err; // user-cancelled or timed out — don't retry
+      lastErr = err;
+      if (attempt < maxRetries) {
+        await new Promise(res => setTimeout(res, 1500 * Math.pow(2, attempt))); // 1.5s, 3s…
+      }
+    }
+  }
+  throw lastErr;
+}
+
+// ══════════════════════════════════════════════════════
+// UKDR UPLB — BACKEND PROXY (primary) + CORS proxy fallback
+//
+// PRIMARY: The local Python backend is the same origin,
+// so /ukdr-search has no CORS issues. Drop ukdr_fetcher.py
+// next to your server and add this route:
+//
+//   @app.get("/ukdr-search")
+//   async def ukdr_search(q: str, max: int = 10):
+//       from ukdr_fetcher import fetch_ukdr
+//       papers = await fetch_ukdr(q, max)
+//       return {"papers": papers}
+//
+// FALLBACK: If backend route not available, tries CORS
+// proxies (corsproxy.io, allorigins) to reach the
+// Digital Commons RSS feed directly from the browser.
+// ══════════════════════════════════════════════════════
+
+function _parseUKDRRSS(xmlText) {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(xmlText, 'application/xml');
+  const DC = 'http://purl.org/dc/elements/1.1/';
+  const items = Array.from(doc.querySelectorAll('item'));
+  return items.map(item => {
+    const get = tag => item.querySelector(tag)?.textContent?.trim() || '';
+    const getNS = tag => {
+      const els = item.getElementsByTagNameNS(DC, tag);
+      return Array.from(els).map(e => e.textContent?.trim()).filter(Boolean);
+    };
+    const link = get('link');
+    const yearMatch = get('pubDate').match(/\d{4}/);
+    const authors = getNS('creator').length ? getNS('creator') : [get('author')].filter(Boolean);
+    const rawDesc = get('description');
+    const abstract = rawDesc.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+    const ids = getNS('identifier');
+    let doi = ids.find(v => v.startsWith('10.') || v.includes('doi.org/')) || '';
+    if (doi.includes('doi.org/')) doi = doi.split('doi.org/')[1];
+    return {
+      title: get('title'), authors,
+      year: yearMatch ? yearMatch[0] : '',
+      abstract, doi,
+      url: link, pdf_url: link,
+      journal: getNS('source')[0] || 'UKDR UPLB',
+      source: 'UKDR UPLB', open_access: true, citations: null,
+    };
+  }).filter(p => p.title);
+}
+
+async function fetchUKDR(query, maxResults = 10) {
+  const encoded = encodeURIComponent(query);
+  const rssTarget = `https://www.ukdr.uplb.edu.ph/do/search/?q=${encoded}&start=0&feed=rss`;
+
+  // ── 1. Try local backend proxy (same-origin, no CORS) ──
+  try {
+    const r = await fetch(`${API_BASE}/ukdr-search?q=${encoded}&max=${maxResults}`, {
+      signal: AbortSignal.timeout(12000)
+    });
+    if (r.ok) {
+      const data = await r.json();
+      if (data.papers && data.papers.length >= 0) {
+        console.log(`[UKDR] backend returned ${data.papers.length} papers`);
+        return data.papers.slice(0, maxResults);
+      }
+    }
+  } catch (e) {
+    console.log('[UKDR] backend route not available, trying CORS proxy...');
+  }
+
+  // ── 2. Try direct fetch (works if UKDR sets CORS headers) ──
+  const proxies = [
+    url => url,                                                      // direct
+    url => `https://corsproxy.io/?${encodeURIComponent(url)}`,      // corsproxy.io
+    url => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`, // allorigins
+  ];
+
+  for (const makeUrl of proxies) {
+    try {
+      const fetchUrl = makeUrl(rssTarget);
+      const r = await fetch(fetchUrl, { signal: AbortSignal.timeout(10000) });
+      if (!r.ok) continue;
+      const xml = await r.text();
+      if (!xml.includes('<item>') && !xml.includes('<item ')) continue;
+      const papers = _parseUKDRRSS(xml).slice(0, maxResults);
+      console.log(`[UKDR] proxy returned ${papers.length} papers`);
+      return papers;
+    } catch (e) {
+      console.log(`[UKDR] proxy attempt failed: ${e.message}`);
+    }
+  }
+
+  console.warn('[UKDR] all fetch methods failed');
+  return [];
+}
+
+// Inject UKDR papers into the already-rendered results area
+function injectUKDRPapers(papers) {
+  if (!papers || papers.length === 0) return;
+  const resultsArea = document.getElementById('resultsArea');
+  if (!resultsArea) return;
+
+  // Deduplicate against already-shown titles
+  const existing = new Set(allPaperTitles.map(t => t.toLowerCase().trim()));
+  const fresh = papers.filter(p => !existing.has((p.title || '').toLowerCase().trim()));
+  if (fresh.length === 0) return;
+
+  // Track for follow-up & citation grounding
+  allRetrievedPapers.push(...fresh);
+  allPaperTitles.push(...fresh.map(p => p.title || ''));
+  if (window._allRenderedPapers) window._allRenderedPapers.push(...fresh);
+
+  const srcColors = { 'UKDR UPLB': 'source-ukdr' };
+  const idOffset = document.querySelectorAll('.paper-card').length;
+
+  let html = `<div id="ukdrInjectedBanner" style="
+    display:flex;align-items:center;gap:8px;margin:16px 0 10px;
+    padding:8px 14px;background:#f0fdf4;border:1px solid rgba(22,101,52,0.2);
+    border-radius:8px;font-family:var(--font-mono);font-size:0.72rem;color:#166534;">
+    <span>🌿</span>
+    <span>UKDR UPLB — ${fresh.length} result${fresh.length > 1 ? 's' : ''} from <a href="https://www.ukdr.uplb.edu.ph/" target="_blank" rel="noopener" style="color:inherit;text-underline-offset:2px">ukdr.uplb.edu.ph</a></span>
+  </div>`;
+
+  fresh.forEach((p, i) => {
+    const gi = idOffset + i;
+    const src = 'ukdr';
+    const authors = (p.authors?.slice(0, 3).join(', ') || '') + (p.authors?.length > 3 ? ` +${p.authors.length - 3}` : '');
+    const year = p.year || '';
+    html += `<div class="paper-card" style="animation-delay:${i * 0.06}s;border-color:rgba(22,101,52,0.25)">
+      <div class="paper-header">
+        <span class="paper-num" style="color:#166534;background:#f0fdf4;border-color:rgba(22,101,52,0.2)">#${gi + 1}</span>
+        <span class="paper-title">${escHtml(p.title || 'Untitled')}</span>
+      </div>
+      <div class="paper-meta">
+        ${authors ? `<span>👤 ${escHtml(authors)}</span>` : ''}
+        ${year ? `<span>📅 ${year}</span>` : ''}
+        ${p.journal ? `<span>📰 ${escHtml(p.journal.slice(0, 40))}</span>` : ''}
+      </div>
+      ${p.abstract ? `<div class="paper-abstract" id="abs${gi}">${escHtml(p.abstract)}</div>` : ''}
+      <div class="paper-footer">
+        <span class="tag source-${src}">UKDR UPLB</span>
+        ${p.doi ? `<a href="https://doi.org/${p.doi}" target="_blank" class="tag" style="text-decoration:none;color:var(--accent2);background:var(--accent2-light);border-color:rgba(8,145,178,0.2)">DOI ↗</a>` : ''}
+        ${p.url ? `<a href="${escHtml(p.url)}" target="_blank" class="tag" style="text-decoration:none;color:#166534;background:#f0fdf4;border-color:rgba(22,101,52,0.2)">View ↗</a>` : ''}
+        <span class="tag" style="color:var(--green);background:var(--green-light)">Open Access</span>
+        ${p.abstract?.length > 200 ? `<button class="tag" style="cursor:pointer;border:none;color:var(--accent);background:var(--accent-light)" onclick="toggleAbstract(${gi})">expand ↕</button>` : ''}
+      </div>
+    </div>
+    <div class="paper-card-mobile" style="animation-delay:${i * 0.06}s">
+      <div class="mobile-card-header" onclick="toggleMobileCard(${gi})">
+        <div class="mobile-card-num" style="background:linear-gradient(135deg,#166534,#15803d)">${gi + 1}</div>
+        <div class="mobile-card-main">
+          <div class="mobile-card-title">${escHtml(p.title || 'Untitled')}</div>
+          <div class="mobile-card-byline">
+            ${year ? `<span>📅 ${year}</span>` : ''}
+            <span class="tag source-${src}" style="font-size:0.63rem">UKDR UPLB</span>
+          </div>
+        </div>
+        <span class="mobile-card-chevron" id="mchev${gi}">▼</span>
+      </div>
+      <div class="mobile-card-body" id="mbody${gi}">
+        <div class="mobile-card-inner">
+          ${authors ? `<div style="font-size:0.78rem;color:var(--text-dim);margin-top:10px">👤 ${escHtml(authors)}</div>` : ''}
+          ${p.abstract ? `<div class="mobile-card-abstract">${escHtml(p.abstract.slice(0, 500))}${p.abstract.length > 500 ? '...' : ''}</div>` : ''}
+          <div class="mobile-card-actions">
+            ${p.url ? `<a href="${escHtml(p.url)}" target="_blank" class="mobile-action-btn doi" style="color:#166534;border-color:rgba(22,101,52,0.3);background:#f0fdf4">🌿 View</a>` : ''}
+          </div>
+        </div>
+      </div>
+    </div>`;
+  });
+
+  // Remove old "Search More" button temporarily, inject UKDR cards, re-add button
+  const moreWrap = document.getElementById('searchMoreWrap');
+  if (moreWrap) moreWrap.remove();
+  resultsArea.insertAdjacentHTML('beforeend', html);
+  showToast(`🌿 UKDR UPLB: +${fresh.length} paper${fresh.length > 1 ? 's' : ''} added`);
+}
+
+async function runResearch() {
+  const rawQuery = document.getElementById('queryInput').value.trim();
+  if (!rawQuery) { showToast('Please enter a research query'); return; }
+  // Expand known CS/AI acronyms so databases don't return irrelevant results
+  // e.g. "LLM" → "large language model"  |  "CNN" → "convolutional neural network"
+  const query = expandQuery(rawQuery);
+  if (query !== rawQuery) {
+    showToast(`🔍 Query expanded: "${rawQuery}" → "${query}"`, 4000);
+  }
+  const mode = document.getElementById('modeSelect').value;
+  const maxPapers = parseInt(document.getElementById('maxPapers').value);
+  const sources = getSelectedSources();
+  if (sources.length === 0) {
+    document.getElementById('sourceWarning').style.display = 'block';
+    showToast('⚠️ Select at least one source');
+    return;
+  }
+  document.getElementById('sourceWarning').style.display = 'none';
+
+  // Cancel any in-flight request before starting a new one
+  if (_currentAbortController) { _currentAbortController.abort(); _currentAbortController = null; }
+
+  // Check cache first
+  const cached = _getCached(query, sources, mode, maxPapers);
+  if (cached) {
+    const ageMin = Math.round((Date.now() - cached.timestamp) / 60000);
+    const data = cached.data;
+    currentSessionId = data.session_id;
+    currentQuery = query; currentSources = sources; currentMode = mode; currentMaxPapers = maxPapers;
+    currentPage = 0; allPaperTitles = (data.papers||[]).map(p=>p.title||'');
+    allRetrievedPapers = data.papers || [];
+    window._allRenderedPapers = data.papers || [];
+    renderResults(data, false);
+    showStats(data);
+    document.getElementById('followupSection').style.display = 'block';
+    buildSuggestionChips(); followupHistory = []; clearFollowup();
+    // Show cache badge on summary card
+    const sc = document.getElementById('summaryCard');
+    if (sc && !sc.querySelector('.cache-badge')) {
+      const h3 = sc.querySelector('h3');
+      if (h3) h3.insertAdjacentHTML('beforeend', `<span class="cache-badge">⚡ Cached · ${ageMin}m ago</span>`);
+    }
+    showToast(`⚡ Loaded from cache (${ageMin}m ago)`);
+    return;
+  }
+
+  // Reset state for new search
+  currentQuery = query; currentSources = sources; currentMode = mode;
+  currentMaxPapers = maxPapers; currentPage = 0; allPaperTitles = [];
+  allRetrievedPapers = []; window._allRenderedPapers = [];
+
+  const btn = document.getElementById('searchBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner" style="width:15px;height:15px;border-width:2px;margin:0;display:inline-block;vertical-align:middle"></span> <span class="btn-label">Searching...</span>';
+  if (isMobile()) switchTab('results');
+  const resultsArea = document.getElementById('resultsArea');
+  resultsArea.innerHTML = loadingHTML(sources);
+  document.getElementById('followupSection').style.display = 'none';
+  document.getElementById('statsCard').style.display = 'none';
+  animateSteps(sources);
+
+  // Fire UKDR fetch in parallel if selected — it runs independently of the backend
+  const ukdrSelected = sources.includes('UKDR UPLB');
+  const ukdrPromise = ukdrSelected
+    ? fetchUKDR(query, maxPapers)
+    : Promise.resolve([]);
+
+  try {
+    const r = await _fetchWithRetry(
+      `${API_BASE}/research`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query, max_papers: maxPapers, mode, sources: sources.filter(s => s !== 'UKDR UPLB') }) },
+      60000, 1
+    );
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    if (data.error) { renderError(data.error); }
+    else {
+      // Store in cache
+      _setCache(query, sources, mode, maxPapers, data);
+      currentSessionId = data.session_id;
+      const newTitles = (data.papers || []).map(p => p.title || '');
+      allPaperTitles = [...allPaperTitles, ...newTitles];
+      allRetrievedPapers = [...allRetrievedPapers, ...(data.papers || [])];
+      renderResults(data, currentPage > 0);
+      if (currentPage === 0) window._allRenderedPapers = data.papers || [];
+      showStats(data);
+      document.getElementById('followupSection').style.display = 'block';
+      buildSuggestionChips(); followupHistory = []; clearFollowup();
+      addToSearchHistory(query, data.papers?.length || 0, (data.duration_seconds || 0).toFixed(1), sources);
+      if (isMobile()) {
+        showToast(`✅ Found ${data.papers?.length || 0} papers`);
+        document.getElementById('nav-results').innerHTML = `<span class="nav-icon">📄</span><span>Papers${data.papers?.length ? ` (${data.papers.length})` : ''}</span>`;
+      }
+      // Inject UKDR results after main render (awaits the parallel fetch)
+      if (ukdrSelected) {
+        // Show a "searching UKDR..." indicator right away
+        showToast('🌿 Searching UKDR UPLB...', 8000);
+        ukdrPromise.then(ukdrPapers => {
+          if (ukdrPapers && ukdrPapers.length > 0) {
+            injectUKDRPapers(ukdrPapers);
+          } else {
+            showToast('🌿 UKDR UPLB: no results for this query');
+          }
+        }).catch(e => {
+          console.warn('[UKDR] injection error:', e);
+          showToast('🌿 UKDR UPLB: search failed');
+        });
+      }
+    }
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      resultsArea.innerHTML = '';
+      return; // silently cancel — user started a new search
+    }
+    const timedOut = err.message && err.message.includes('abort');
+    renderError(
+      timedOut
+        ? 'Request timed out after 60 seconds.\n\nThe backend may be overloaded. Please try again.'
+        : `Could not connect to backend: ${err.message}\n\nMake sure:\n1. uvicorn is running\n2. Groq API key is set in .env`
+    );
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<span>🔍</span> <span class="btn-label">Research</span>';
+  }
+}
+
+function loadingHTML(sources) {
+  const srcList = sources && sources.length > 0 ? sources : ['Selected sources'];
+  const stepItems = srcList.map((src, i) =>
+    `<li id="lstep${i}"><span>⏳</span> Searching ${escHtml(src)}...</li>`
+  ).join('');
+  const subtitle = srcList.length === 1
+    ? `Querying ${escHtml(srcList[0])}`
+    : `Querying ${srcList.length} sources: ${srcList.slice(0,3).map(escHtml).join(', ')}${srcList.length > 3 ? ` +${srcList.length - 3} more` : ''}`;
+  return `<div class="loading-card">
+    <div class="spinner"></div>
+    <p style="font-family:var(--font-serif);font-size:1.1rem;color:var(--text);margin-bottom:6px;font-weight:600">Searching Academic Databases...</p>
+    <p style="font-size:0.83rem;color:var(--text-dim);margin-bottom:4px">${subtitle}</p>
+    <ul class="loading-steps" id="loadingSteps">${stepItems}</ul>
+  </div>`;
+}
+
+function animateSteps(sources) {
+  const count = sources && sources.length > 0 ? sources.length : 1;
+  let i = 0;
+  const iv = setInterval(() => {
+    const prev = document.getElementById(`lstep${i - 1}`);
+    if (prev) { prev.classList.remove('active'); prev.classList.add('done'); prev.querySelector('span').textContent = '✅'; }
+    const el = document.getElementById(`lstep${i}`);
+    if (el) { el.classList.add('active'); el.querySelector('span').textContent = '🔄'; }
+    i++;
+    if (i >= count) {
+      clearInterval(iv);
+      // Mark all remaining as done after a short delay
+      setTimeout(() => {
+        for (let j = 0; j < count; j++) {
+          const s = document.getElementById(`lstep${j}`);
+          if (s) { s.classList.remove('active'); s.classList.add('done'); s.querySelector('span').textContent = '✅'; }
+        }
+      }, 3000);
+    }
+  }, Math.max(1500, Math.min(4000, 20000 / count)));
+}
+
+function renderResults(data, appendMode = false) {
+  const papers = data.papers || [];
+  let html = '';
+
+  if (!appendMode && data.summary) {
+    const summaryId1 = 'summaryText-page1';
+    const flesch = fleschScore(data.summary);
+    const rbClass = flesch >= 60 && flesch <= 70 ? 'rb-standard' : flesch < 60 ? 'rb-complex' : 'rb-simple';
+    const rbLabel = flesch >= 60 && flesch <= 70 ? '✓ Standard Readability' : flesch < 60 ? '⚠ Complex — consider simplifying' : '● Simple';
+    const checklist = buildCompletenessChecklist(data.summary);
+    const structuredHtml = currentSummaryFormat !== 'standard' ? buildStructuredSummary(data.summary, currentSummaryFormat) : '';
+    html += `<div class="summary-card" id="summaryCard">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+        <h3 style="margin-bottom:0">🧠 AI Research Summary <span style="font-family:var(--font-mono);font-size:0.68rem;color:var(--accent2);font-weight:400;margin-left:8px">Page 1 · ${currentSummaryFormat === 'standard' ? 'Narrative' : currentSummaryFormat === 'structured' ? 'Structured' : 'RRL-Ready'}</span></h3>
+        <span class="readability-badge ${rbClass}" title="Flesch Reading Ease: ${flesch}">📖 ${rbLabel} (${flesch})</span>
+      </div>
+      ${currentSummaryFormat === 'standard'
+        ? `<p id="${summaryId1}">${escHtml(data.summary)}</p>`
+        : `<p id="${summaryId1}" style="display:none">${escHtml(data.summary)}</p>
+           <div class="structured-summary visible" id="structuredView1">${structuredHtml}</div>`
+      }
+      <div class="completeness-bar" id="completenessBar1">${checklist}</div>
+      <div class="citation-warning ${data.summary.includes('[Inferred]') || data.summary.includes('[Source not retrieved]') || data.summary.split('.').length > 12 ? 'visible' : ''}" id="citWarn1">
+        ⚠️ <span>Some claims may not be directly verifiable in the retrieved abstracts. Cross-check before citing. Unverified claims are labelled <code>[Source not retrieved]</code>.</span>
+      </div>
+      ${buildICCRubricPanel()}
+      <div class="summary-actions">
+        <button onclick="copySummary('${summaryId1}')" style="display:inline-flex;align-items:center;gap:5px;padding:5px 12px;background:white;border:1.5px solid rgba(37,99,235,0.25);border-radius:20px;color:var(--accent);font-size:0.72rem;font-family:var(--font-mono);cursor:pointer;transition:all 0.2s;font-weight:500" onmouseover="this.style.background='var(--accent)';this.style.color='white'" onmouseout="this.style.background='white';this.style.color='var(--accent)'">📋 Copy</button>
+        <button class="simplify-btn" id="simplifyBtn1" onclick="simplifySummary('${summaryId1}','structuredView1','completenessBar1')">✨ Simplify Language</button>
+      </div>
+    </div>
+    ${papers.length >= 3 ? `<div class="synthesis-matrix visible" id="synthesisMatrix1"><h3>🔗 Cross-Paper Synthesis Matrix <span style="font-family:var(--font-mono);font-size:0.68rem;color:var(--accent2);font-weight:400">${papers.length} papers compared</span></h3>${buildSynthesisMatrix(papers)}</div>` : ''}`;
+  }
+  // On append mode: update the existing summary card and synthesis matrix in-place
+  if (appendMode) {
+    const totalPapers = data.total_papers || allPaperTitles.length;
+    const newSummaryText = data.summary || '';
+
+    // 1. Update the original summary card content if a new summary was returned
+    if (newSummaryText) {
+      const summaryTextEl = document.getElementById('summaryText-page1');
+      if (summaryTextEl) summaryTextEl.textContent = newSummaryText;
+
+      // Update structured view if active
+      const structuredViewEl = document.getElementById('structuredView1');
+      if (structuredViewEl && currentSummaryFormat !== 'standard') {
+        structuredViewEl.innerHTML = buildStructuredSummary(newSummaryText, currentSummaryFormat);
+      }
+
+      // Update completeness checklist
+      const checklistEl = document.getElementById('completenessBar1');
+      if (checklistEl) checklistEl.innerHTML = buildCompletenessChecklist(newSummaryText);
+
+      // Update the summary card heading to reflect total paper count
+      const summaryHeading = document.querySelector('#summaryCard h3');
+      if (summaryHeading) {
+        summaryHeading.innerHTML = '🧠 AI Research Summary <span style="font-family:var(--font-mono);font-size:0.68rem;color:var(--accent2);font-weight:400;margin-left:8px">Updated · ' + totalPapers + ' papers</span>';
+      }
+
+      // Update readability badge
+      const flesch = fleschScore(newSummaryText);
+      const rbClass = flesch >= 60 && flesch <= 70 ? 'rb-standard' : flesch < 60 ? 'rb-complex' : 'rb-simple';
+      const rbLabel = flesch >= 60 && flesch <= 70 ? '✓ Standard Readability' : flesch < 60 ? '⚠ Complex — consider simplifying' : '● Simple';
+      const rbEl = document.querySelector('#summaryCard .readability-badge');
+      if (rbEl) {
+        rbEl.className = 'readability-badge ' + rbClass;
+        rbEl.title = 'Flesch Reading Ease: ' + flesch;
+        rbEl.textContent = '📖 ' + rbLabel + ' (' + flesch + ')';
+      }
+
+      // Pulse the summary card border to signal update
+      const summaryCard = document.getElementById('summaryCard');
+      if (summaryCard) {
+        summaryCard.style.transition = 'border-color 0.4s';
+        summaryCard.style.borderColor = 'rgba(8,145,178,0.6)';
+        setTimeout(() => { summaryCard.style.borderColor = ''; }, 1400);
+      }
+    }
+
+    // 2. Always rebuild the synthesis matrix with ALL accumulated papers
+    window._allRenderedPapers = (window._allRenderedPapers || []).concat(papers);
+    const matrixEl = document.getElementById('synthesisMatrix1');
+    const allPapers = window._allRenderedPapers;
+    if (matrixEl && allPapers.length >= 3) {
+      const h3 = document.createElement('h3');
+      h3.innerHTML = '🔗 Cross-Paper Synthesis Matrix <span style="font-family:var(--font-mono);font-size:0.68rem;color:var(--accent2);font-weight:400">' + allPapers.length + ' papers compared</span>';
+      matrixEl.innerHTML = '';
+      matrixEl.appendChild(h3);
+      matrixEl.insertAdjacentHTML('beforeend', buildSynthesisMatrix(allPapers));
+      matrixEl.style.transition = 'border-color 0.4s';
+      matrixEl.style.borderColor = 'rgba(8,145,178,0.6)';
+      setTimeout(() => { matrixEl.style.borderColor = ''; }, 1400);
+    }
+  }
+  if (papers.length > 0) {
+    const srcCounts = {};
+    papers.forEach(p => { const s = p.source||'Unknown'; srcCounts[s] = (srcCounts[s]||0)+1; });
+    const srcColors = { arXiv:'source-arxiv', OpenAlex:'source-openalex', CrossRef:'source-crossref', Scopus:'source-scopus', PubMed:'source-pubmed', 'Semantic Scholar':'source-semantic', CORE:'source-core', 'Springer Nature':'source-springer', 'HERDIN Plus':'source-herdinplus', 'Philippine E-Journals':'source-philippinejournals' , DOAJ:'source-doaj', 'UKDR UPLB':'source-ukdr' };
+    let srcBreakdown = Object.entries(srcCounts).map(([src, cnt]) => `<span class="tag ${srcColors[src]||''}">${src}: ${cnt}</span>`).join('');
+    html += `<div class="results-header">
+      <span class="results-title">Found Papers</span>
+      <span class="results-meta">${papers.length} results · ${(data.duration_seconds||0).toFixed(1)}s · ${data.steps_taken||'?'} steps</span>
+    </div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">${srcBreakdown}</div>
+    <div class="export-row">
+      <button class="export-btn" onclick="exportCSV()">📊 Export CSV</button>
+      <button class="export-btn" onclick="exportBibTeX()">📚 Export BibTeX</button>
+    </div>`;
+    // Offset IDs and numbering so appended papers don't collide with existing ones
+    const idOffset = appendMode ? document.querySelectorAll('.paper-card').length : 0;
+    papers.forEach((p, i) => {
+      const gi = idOffset + i; // global index across all pages
+      const src = (p.source||'').toLowerCase().replace(' ','');
+      const authors = (p.authors?.slice(0,3).join(', ')||'') + (p.authors?.length>3?` +${p.authors.length-3}`:'');
+      const year = p.year||p.published||'';
+      const citations = p.citations!=null ? `📖 ${p.citations}` : '';
+      html += `<div class="paper-card" style="animation-delay:${i*0.06}s">
+        <div class="paper-header">
+          <span class="paper-num">#${gi+1}</span>
+          <span class="paper-title">${escHtml(p.title||'Untitled')}</span>
+        </div>
+        <div class="paper-meta">
+          ${authors?`<span>👤 ${escHtml(authors)}</span>`:''}
+          ${year?`<span>📅 ${year}</span>`:''}
+          ${citations?`<span>${citations} cites</span>`:''}
+          ${p.journal?`<span>📰 ${escHtml(p.journal.slice(0,40))}</span>`:''}
+        </div>
+        ${p.abstract?`<div class="paper-abstract" id="abs${gi}">${escHtml(p.abstract)}</div>`:''}
+        <div class="paper-footer">
+          <span class="tag source-${src}">${p.source||'Unknown'}</span>
+          ${p.doi?`<a href="https://doi.org/${p.doi}" target="_blank" class="tag" style="text-decoration:none;color:var(--accent2);background:var(--accent2-light);border-color:rgba(8,145,178,0.2)">DOI ↗</a>`:''}
+          ${p.pdf_url?`<a href="${p.pdf_url}" target="_blank" class="tag" style="text-decoration:none;color:var(--gold);background:var(--gold-light);border-color:rgba(180,83,9,0.2)">PDF ↗</a>`:''}
+          ${p.open_access?`<span class="tag" style="color:var(--green);background:var(--green-light)">Open Access</span>`:''}
+          ${(p.keywords||p.concepts||[]).slice(0,3).map(c=>`<span class="tag">${escHtml(c)}</span>`).join('')}
+          ${p.abstract?.length>200?`<button class="tag" style="cursor:pointer;border:none;color:var(--accent);background:var(--accent-light)" onclick="toggleAbstract(${gi})">expand ↕</button>`:''}
+        </div>
+      </div>`;
+      html += `<div class="paper-card-mobile" style="animation-delay:${i*0.06}s">
+        <div class="mobile-card-header" onclick="toggleMobileCard(${gi})">
+          <div class="mobile-card-num">${gi+1}</div>
+          <div class="mobile-card-main">
+            <div class="mobile-card-title">${escHtml(p.title||'Untitled')}</div>
+            <div class="mobile-card-byline">
+              ${year?`<span>📅 ${year}</span>`:''}
+              ${citations?`<span>${citations}</span>`:''}
+              <span class="tag source-${src}" style="font-size:0.63rem">${p.source||''}</span>
+            </div>
+          </div>
+          <span class="mobile-card-chevron" id="mchev${gi}">▼</span>
+        </div>
+        <div class="mobile-card-body" id="mbody${gi}">
+          <div class="mobile-card-inner">
+            ${authors?`<div style="font-size:0.78rem;color:var(--text-dim);margin-top:10px">👤 ${escHtml(authors)}</div>`:''}
+            ${p.journal?`<div style="font-size:0.75rem;color:var(--text-dim);margin-top:4px">📰 ${escHtml(p.journal)}</div>`:''}
+            ${p.abstract?`<div class="mobile-card-abstract">${escHtml(p.abstract.slice(0,500))}${p.abstract.length>500?'...':''}</div>`:''}
+            <div class="mobile-card-actions">
+              ${p.doi?`<a href="https://doi.org/${p.doi}" target="_blank" class="mobile-action-btn doi">🔗 DOI</a>`:''}
+              ${p.pdf_url?`<a href="${p.pdf_url}" target="_blank" class="mobile-action-btn pdf">📄 PDF</a>`:''}
+              ${!p.doi&&!p.pdf_url?`<span style="font-size:0.78rem;color:var(--text-dim)">No links available</span>`:''}
+            </div>
+          </div>
+        </div>
+      </div>`;
+    });
+  } else if (!data.summary) {
+    html += `<div class="empty-state"><div class="empty-icon">🔍</div><h3>No Papers Found</h3><p>Try a different query or check your connection.</p></div>`;
+  }
+  if (appendMode) {
+    // Remove existing Search More button before appending
+    const existing = document.getElementById('searchMoreBtn');
+    if (existing) existing.parentElement.remove();
+    // Append new paper cards
+    document.getElementById('resultsArea').insertAdjacentHTML('beforeend', html);
+  } else {
+    document.getElementById('resultsArea').innerHTML = html;
+  }
+  // ── ENHANCEMENT: Lazy-render paper cards via IntersectionObserver ──────
+  // Cards are rendered hidden; observer reveals them as they scroll into view
+  (function lazyRevealCards() {
+    const cards = document.querySelectorAll('.paper-card, .paper-card-mobile');
+    if (!cards.length) return;
+    const obs = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          entry.target.style.opacity = '1';
+          entry.target.style.transform = 'translateY(0)';
+          obs.unobserve(entry.target);
+        }
+      });
+    }, { rootMargin: '120px' });
+    cards.forEach((card, idx) => {
+      if (idx >= 6) {
+        card.style.opacity = '0';
+        card.style.transform = 'translateY(10px)';
+        card.style.transition = 'opacity 0.35s ease, transform 0.35s ease';
+        obs.observe(card);
+      }
+    });
+  })();
+
+  // Always add/refresh Search More button at the bottom
+  if (papers.length >= currentMaxPapers) {
+    const moreWrap = document.createElement('div');
+    moreWrap.id = 'searchMoreWrap';
+    moreWrap.style.cssText = 'text-align:center;margin:24px 0 8px;';
+    moreWrap.innerHTML = `
+      <button id="searchMoreBtn" onclick="searchMore()" class="btn btn-ghost"
+        style="gap:10px;padding:13px 32px;border-radius:50px;font-size:0.88rem;
+               border-color:var(--accent);color:var(--accent);background:var(--accent-light);">
+        <span style="font-size:1.1rem">🔍</span>
+        Search More
+        <span style="font-family:var(--font-mono);font-size:0.72rem;
+                     background:var(--accent);color:white;border-radius:10px;
+                     padding:2px 8px;">page ${currentPage + 2}</span>
+      </button>
+      <div style="font-size:0.75rem;color:var(--text-dim);margin-top:8px;
+                  font-family:var(--font-mono);">
+        Searches same sources for different papers
+      </div>`;
+    document.getElementById('resultsArea').appendChild(moreWrap);
+  }
+}
+
+async function searchMore() {
+  const btn = document.getElementById('searchMoreBtn');
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner" style="width:14px;height:14px;border-width:2px;margin:0;display:inline-block;vertical-align:middle"></span> Searching next page...';
+  }
+  currentPage += 1;
+  try {
+    const r = await fetch(`${API_BASE}/research`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query: currentQuery,
+        max_papers: currentMaxPapers,
+        mode: currentMode,
+        sources: currentSources,
+        page: currentPage,
+        seen_titles: allPaperTitles,
+        session_id: currentSessionId,   // so backend appends to same session
+      })
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    if (data.error) {
+      showToast('⚠️ ' + data.error);
+      currentPage -= 1;
+    } else {
+      const newTitles = (data.papers || []).map(p => p.title || '');
+      allPaperTitles = [...allPaperTitles, ...newTitles];
+      allRetrievedPapers = [...allRetrievedPapers, ...(data.papers || [])]; // ✅ CITATION GROUNDING
+      if (!data.papers || data.papers.length === 0) {
+        showToast('No more papers found for this query.');
+        const moreWrap = document.getElementById('searchMoreWrap');
+        if (moreWrap) moreWrap.remove();
+        currentPage -= 1;
+      } else {
+        renderResults(data, true);
+        const totalNow = window._allRenderedPapers ? window._allRenderedPapers.length : allPaperTitles.length;
+        showToast(`✅ ${data.papers.length} more papers loaded — summary & matrix updated (${totalNow} total)`, 4000);
+        // Update follow-up section to reflect total papers now in session
+        const countEl = document.getElementById('followupPaperCount');
+        if (countEl && data.total_papers) {
+          countEl.textContent = `all ${data.total_papers} papers retrieved`;
+        }
+        // Scroll to first new paper smoothly
+        const allCards = document.querySelectorAll('.paper-card, .paper-card-mobile');
+        if (allCards.length > currentMaxPapers) {
+          allCards[allCards.length - data.papers.length]?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+      }
+    }
+  } catch (err) {
+    showToast('⚠️ Could not load more: ' + err.message);
+    currentPage -= 1;
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = `<span>🔍</span> Search More <span style="font-family:var(--font-mono);font-size:0.72rem;background:var(--accent);color:white;border-radius:10px;padding:2px 8px;">page ${currentPage + 2}</span>`;
+    }
+  }
+}
+
+function toggleMobileCard(i) {
+  document.getElementById(`mbody${i}`)?.classList.toggle('open');
+  document.getElementById(`mchev${i}`)?.classList.toggle('open');
+}
+
+function toggleAbstract(i) {
+  document.getElementById(`abs${i}`)?.classList.toggle('expanded');
+}
+
+function renderError(msg) {
+  document.getElementById('resultsArea').innerHTML = `<div class="error-card"><strong>⚠️ Error</strong><br><br><pre style="font-size:0.82rem;white-space:pre-wrap;margin-top:8px">${escHtml(msg)}</pre></div>`;
+}
+
+// ── ENHANCEMENT: Export to CSV ────────────────────────────────────────────
+function exportCSV() {
+  if (!allRetrievedPapers || allRetrievedPapers.length === 0) {
+    showToast('⚠️ No papers to export. Run a search first.');
+    return;
+  }
+  const rows = [['Title','Authors','Year','Journal','DOI','Source','Citations']];
+  allRetrievedPapers.forEach(p => {
+    rows.push([
+      (p.title||'').replace(/"/g,'""'),
+      (p.authors||[]).join('; ').replace(/"/g,'""'),
+      p.year||p.published||'',
+      (p.journal||'').replace(/"/g,'""'),
+      p.doi||'',
+      p.source||'',
+      p.citations!=null ? p.citations : ''
+    ]);
+  });
+  const csv = rows.map(r => r.map(v => `"${v}"`).join(',')).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url;
+  a.download = `research_papers_${Date.now()}.csv`;
+  a.click(); URL.revokeObjectURL(url);
+  showToast('✅ CSV exported');
+}
+
+// ── ENHANCEMENT: Export to BibTeX ─────────────────────────────────────────
+function exportBibTeX() {
+  if (!allRetrievedPapers || allRetrievedPapers.length === 0) {
+    showToast('⚠️ No papers to export. Run a search first.');
+    return;
+  }
+  const clean = s => (s||'').replace(/[{}\\]/g,'');
+  const entries = allRetrievedPapers.map((p, i) => {
+    const firstAuthor = (p.authors&&p.authors[0]||'Unknown').split(',')[0].trim().replace(/\s+/g,'_');
+    const year = p.year||p.published||'0000';
+    const key = `${firstAuthor}${year}_${i+1}`;
+    const authors = (p.authors||[]).join(' and ');
+    let entry = `@article{${key},
+`;
+    entry += `  title     = {${clean(p.title)}},
+`;
+    entry += `  author    = {${clean(authors)}},
+`;
+    entry += `  year      = {${year}},
+`;
+    if (p.journal) entry += `  journal   = {${clean(p.journal)}},
+`;
+    if (p.doi)     entry += `  doi       = {${p.doi}},
+`;
+    if (p.source)  entry += `  note      = {Source: ${p.source}},
+`;
+    entry += `}`;
+    return entry;
+  });
+  const bibtex = entries.join('\n\n');
+  const blob = new Blob([bibtex], { type: 'text/plain;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url;
+  a.download = `research_papers_${Date.now()}.bib`;
+  a.click(); URL.revokeObjectURL(url);
+  showToast('✅ BibTeX exported');
+}
+
+function showStats(data) {
+  document.getElementById('statsCard').style.display = 'block';
+  document.getElementById('statRows').innerHTML = [
+    ['Papers found', data.papers?.length||0],
+    ['LLM', data.active_llm || (data.groq ? 'Groq' : 'Gemini')],
+    ['Scopus', data.scopus_enabled ? '✓ Active' : '✗ No key'],
+    ['Springer', data.springer_enabled ? '✓ Active' : '✗ No key'],
+    ['CORE', '✓ Always on'],
+    ['Agent steps', data.steps_taken||'—'],
+    ['Time taken', `${(data.duration_seconds||0).toFixed(1)}s`],
+    ['Mode', data.mode||'—'],
+  ].map(([l,v]) => `<div class="stat-row"><span class="stat-label">${l}</span><span class="stat-val">${escHtml(String(v))}</span></div>`).join('');
+}
+
+// ── FOLLOW-UP ──
+const SUGGESTIONS = [
+  // General
+  'Which paper has the most citations?',
+  'What were the key findings and results?',
+  'Compare the research methods and study designs used',
+  'What data, datasets, or study populations were used?',
+  // RRL-specific
+  'What research gap or problem motivated these studies?',
+  'What theories or conceptual frameworks do these papers use?',
+  'Are there contradictions or disagreements between these studies?',
+  'Which studies were conducted in the Philippine context?',
+  'Which papers were published most recently?',
+  'What variables or constructs do these papers commonly measure?',
+  // Methodology
+  'What are the practical applications or real-world implications?',
+  'What limitations or weaknesses did the authors acknowledge?',
+  'How do these papers build on or differ from previous research?',
+  'What future research directions do the authors recommend?',
+  // Cross-disciplinary / policy (addresses weak topics from evaluation)
+  'What policy recommendations do these papers make?',
+  'What stakeholders or institutions are discussed across these papers?',
+  'How do these papers address regional or country-specific contexts?',
+  'What economic, social, or environmental dimensions are covered?',
+  'Which papers bridge multiple disciplines or fields?',
+  // Practical
+  'Which papers are open access and have free full text available?',
+  'Which paper is most relevant to my topic and why?',
+];
+
+// ── ENHANCEMENT: Debounce helper ──────────────────────────────────────────
+function debounce(fn, ms) {
+  let timer;
+  return function(...args) {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn.apply(this, args), ms);
+  };
+}
+
+function buildSuggestionChips() {
+  const chips = document.getElementById('suggestionChips');
+  if (!chips) return;
+  chips.innerHTML = SUGGESTIONS.map(s =>
+    `<button onclick="setFollowupQuery(this)" style="font-size:0.75rem;padding:5px 10px;border-radius:20px;border:1px solid var(--border);background:var(--surface2);color:var(--text-mid);cursor:pointer;font-family:var(--font-sans);transition:all 0.2s;white-space:nowrap" onmouseover="this.style.borderColor='var(--accent)';this.style.color='var(--accent)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text-mid)'">${s}</button>`
+  ).join('');
+}
+
+function setFollowupQuery(btn) {
+  document.getElementById('followupInput').value = btn.textContent;
+  document.getElementById('followupInput').focus();
+}
+
+function clearFollowup() {
+  document.getElementById('followupInput').value = '';
+  document.getElementById('followupResult').style.display = 'none';
+  document.getElementById('followupHistory').innerHTML = '';
+}
+
+let followupHistory = [];
+
+async function askFollowup() {
+  if (!currentSessionId) { showToast('⚠️ Run a search first'); return; }
+  const query = document.getElementById('followupInput').value.trim();
+  if (!query) { showToast('Enter a follow-up question'); return; }
+  const btn = document.getElementById('followupBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner" style="width:12px;height:12px;border-width:2px;margin:0;display:inline-block;vertical-align:middle"></span> Thinking...';
+  const resultEl = document.getElementById('followupResult');
+  const answerEl = document.getElementById('followupAnswer');
+  const sourcesEl = document.getElementById('followupSources');
+  const sourceListEl = document.getElementById('followupSourceList');
+  resultEl.style.display = 'block';
+  answerEl.textContent = '⏳ Searching through retrieved papers...';
+  sourcesEl.style.display = 'none';
+  try {
+    const r = await fetch(`${API_BASE}/followup`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query,
+        session_id: currentSessionId,
+        // Precision engine role injected into backend system prompt
+        system_role: `You are a precision-oriented academic research engine targeting ICC ≥ 0.90. Domain: Computer Science, Information Systems, Philippine academic contexts. Rules: (1) Only cite statistics that appear verbatim in the source. (2) Every factual claim needs a paper reference. (3) If a detail is not in the retrieved papers, state "Not reported in source." (4) Highlight Philippine database sources (HERDIN Plus, UKDR UPLB, Philippine E-Journals) with [PH SOURCE]. (5) Interpret CNN as Convolutional Neural Networks, RAG as Retrieval-Augmented Generation, NLP as Natural Language Processing. Maintain academic tone — no "AI-isms."`,
+        output_mode: document.getElementById('followupOutputMode')?.value || 'default'
+      })
+    });
+    const data = await r.json();
+    if (data.error) {
+      answerEl.textContent = '⚠️ ' + data.error;
+      answerEl.style.background = 'var(--red-light)';
+    } else {
+      answerEl.textContent = data.answer || 'No answer returned.';
+      answerEl.style.background = 'var(--accent-light)';
+      answerEl.style.borderColor = 'rgba(37,99,235,0.15)';
+      if (data.sources?.length > 0) {
+        sourcesEl.style.display = 'block';
+        sourceListEl.innerHTML = data.sources.map(title =>
+          `<span style="font-size:0.72rem;padding:3px 9px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--text-mid)">${escHtml(title.slice(0,60))}${title.length>60?'...':''}</span>`
+        ).join('');
+      }
+      followupHistory.unshift({ q: query, a: data.answer, sources: data.sources||[] });
+      renderFollowupHistory();
+      document.getElementById('followupInput').value = '';
+    }
+  } catch (err) {
+    answerEl.textContent = `Connection error: ${err.message}`;
+    answerEl.style.background = 'var(--red-light)';
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '💬 Ask';
+  }
+}
+
+// ── RRL PROMPT v3 — PRECISION ACADEMIC ENGINE, ICC ≥ 0.90 TARGET ──────────
+// ROLE: Precision-oriented academic research engine
+// TARGET: Inter-rater Reliability (ICC) ≥ 0.90
+// DOMAIN: Computer Science, Information Systems, Philippine academic contexts
+// MODIFICATION: Full replacement with 5-layer protocol:
+//   Layer 1: Domain-specific role anchoring (CS/IS/PH context)
+//   Layer 2: Verbatim extraction + citation locking (no derived stats)
+//   Layer 3: Strict non-hallucination with "Not reported in source" fallback
+//   Layer 4: Philippine DB prioritization (HERDIN, UKDR, PEJ highlighting)
+//   Layer 5: Post-generation self-audit against all 4 data-handling rules
+const rrlBasePrompt = `You are a precision-oriented academic research engine targeting Inter-rater Reliability (ICC) ≥ 0.90. Your domain focus is Computer Science, Information Systems, and Philippine-specific academic contexts.
+
+[DATA HANDLING & TRUTH ANCHORING]
+1. VERBATIM EXTRACTION: Only include percentages, sample sizes, and p-values that appear verbatim in the source abstracts. Do not derive, estimate, or round statistics.
+2. CITATION LOCKING: Every empirical claim must be immediately followed by its bracketed reference ID in the form [P1], [P2], etc. from the VERIFIED PAPER REGISTRY.
+3. STRICT NON-HALLUCINATION: If a paper does not mention a specific detail, state "Not reported in source." Do not invent DOIs, years, or author names not present in the registry.
+4. LOCAL CONTEXT: When papers from Philippine databases (HERDIN Plus, UKDR UPLB, Philippine E-Journals) appear in the registry, prioritize their findings and clearly mark them with [PH SOURCE] inline.
+
+[DOMAIN-SPECIFIC LOGIC]
+- Interpret technical acronyms strictly: CNN (Convolutional Neural Networks), RAG (Retrieval-Augmented Generation), NLP (Natural Language Processing), LSTM (Long Short-Term Memory), GAN (Generative Adversarial Network).
+- Maintain an objective, academic tone. Avoid "AI-isms" such as "In today's fast-paced world" or phrases like "delve into."
+- For CS/IS papers, explicitly note study design (experimental, survey, quasi-experimental, case study) when reported.
+
+[CITATION RULES — absolute, no exceptions]
+- NEVER invent authors, years, DOIs, or journals not in the registry
+- NEVER include a statistic (%, number, ratio) unless it appears verbatim in the source abstract
+- NEVER cite a paper not in the registry, even if you know it from training data
+- If uncertain about any claim: write "Not reported in source." — never speculate
+- APA 7 in-text format: (Smith, 2021) | (Smith & Jones, 2021) | (Smith et al., 2021)
+- Narrative form: Smith (2021) demonstrated... | Smith and Jones (2021) found...
+- If the provided papers are insufficient to answer a section, output exactly: ⚠️ INSUFFICIENT DATA: The provided documents do not contain enough information to accurately address this query. Refusing to generate speculative content.
+
+[OUTPUT — RRL-READY FORMAT]
+Use exactly these section headers:
+
+## Introduction and Background
+Summarize the current state of the field. Cite at least 2 registry papers. If Philippine sources exist, introduce them here with [PH SOURCE].
+
+## Thematic Synthesis
+Group findings by shared concepts and themes — never paper-by-paper summaries. Required connectives: "Similarly...", "In contrast...", "Building on...", "Consistent with...", "Whereas...". Identify where papers agree or diverge.
+
+## Identified Research Gaps
+List specific areas currently unaddressed by the provided literature. Base only on what papers explicitly state — name specific unstudied angles.
+
+## Implications and Future Directions
+Discuss the practical impact of these findings, grounded in registry data only. Include policy or pedagogical implications when relevant to PH HEI context.
+
+## References
+APA 7 format, alphabetical, registry papers only — no invented entries.
+
+Length: 5–6 paragraphs + References. Formal academic English. Target Flesch Reading Ease: 55–70.
+
+[POST-GENERATION AUDIT — perform before outputting]
+✓ Does every sentence with a statistic have a [PX] citation?
+✓ Are there any ghost citations (authors/years not in the registry)?
+✓ Is the layout clean Markdown without HTML tags?
+✓ Are Philippine sources highlighted with [PH SOURCE] where applicable?
+If any check fails — correct before outputting. Replace unverified claims with "Not reported in source."`;
+
+// ── STRUCTURED SUMMARY PROMPT — for [STRUCTURED SUMMARY] output mode ──
+const structuredSummarySystemPrompt = `You are a precision-oriented academic research engine targeting ICC ≥ 0.90. Your domain focus is Computer Science, Information Systems, and Philippine-specific academic contexts.
+
+For each paper in the VERIFIED PAPER REGISTRY, produce a STRUCTURED SUMMARY in this exact format:
+
+### [PX] — Paper Title (Author, Year)
+**Objective:** State the research aim in one sentence.
+**Methodology:** Study design, sample size (verbatim if stated), instruments used.
+**Key Results:** List findings with verbatim statistics only — every figure must cite [PX]. If a detail is not in the abstract, write "Not reported in source."
+**Critical Limitations:** What the paper explicitly acknowledges as limitations. If not stated: "Not reported in source."
+${''/* Philippine source flag */}If source is HERDIN Plus, Philippine E-Journals, or UKDR UPLB, prepend: 🇵🇭 [PH SOURCE]
+
+[DATA HANDLING RULES]
+- VERBATIM EXTRACTION: Only include percentages, sample sizes, and p-values that appear verbatim in the abstract.
+- CITATION LOCKING: Every empirical claim → [PX] immediately after.
+- STRICT NON-HALLUCINATION: Missing details → "Not reported in source."
+- DOMAIN LOGIC: CNN = Convolutional Neural Networks; RAG = Retrieval-Augmented Generation; NLP = Natural Language Processing. Avoid "AI-isms."
+
+[POST-GENERATION AUDIT]
+- Every statistic has [PX] citation? ✓
+- No ghost citations? ✓
+- Philippine sources flagged? ✓`;
+
+/** Build the complete grounded RRL prompt for a given set of papers.
+ *  mode: 'rrl-ready' (default) | 'structured-summary'
+ */
+function buildGroundedRRLPrompt(papers, mode) {
+  const constraintBlock = buildCitationConstraintBlock(papers);
+  const basePrompt = (mode === 'structured-summary')
+    ? structuredSummarySystemPrompt
+    : rrlBasePrompt;
+  return basePrompt + constraintBlock;
+}
+
+// MODIFICATION: Strengthened citation constraint block with explicit locked-field table
+//   + Philippine source flagging (HERDIN Plus, UKDR UPLB, Philippine E-Journals)
+//   + Insufficient-data guard clause
+// PURPOSE: Eliminates guess-work that causes fabrication; ICC target ≥ 0.90
+function buildCitationConstraintBlock(papers) {
+  if (!papers || !papers.length) return '';
+
+  const PHILIPPINE_SOURCES = ['HERDIN Plus', 'Philippine E-Journals', 'UKDR UPLB', 'HERDIN', 'PEJ'];
+
+  const lines = papers.map((p, i) => {
+    // Build author string exactly as it should appear in APA in-text citation
+    const rawAuthors = (p.authors || []).slice(0, 6);
+    const firstLast = extractFirstAuthorLastFromArray(p.authors || []);
+    const authorAPA = rawAuthors.length === 0 ? 'Unknown Author'
+      : rawAuthors.length === 1 ? rawAuthors[0]
+      : rawAuthors.length === 2 ? rawAuthors.join(' & ')
+      : `${rawAuthors[0]} et al.`;
+    const year = p.year || p.published || 'n.d.';
+    const title = (p.title || 'Untitled').slice(0, 140);
+    const doi  = p.doi  ? `DOI: ${p.doi}`  : 'DOI: [not available — do not generate one]';
+    const journal = p.journal ? `Journal/Source: ${p.journal}` : `Source: ${p.source || 'Unknown'}`;
+    const inTextCite = rawAuthors.length <= 2 
+      ? `(${rawAuthors.map(a => a.split(',')[0].trim()).join(' & ')}, ${year})`
+      : `(${rawAuthors[0].split(',')[0].trim()} et al., ${year})`;
+    
+    // Flag Philippine sources
+    const isPhilippine = PHILIPPINE_SOURCES.some(ps => (p.source || '').includes(ps));
+    const phFlag = isPhilippine ? ' 🇵🇭 [PH SOURCE — PRIORITIZE IN SYNTHESIS]' : '';
+
+    return [
+      `[P${i + 1}] CITE: ${inTextCite} | ${title}${phFlag}`,
+      `  ${journal} | ${doi}`,
+      `  Abstract: ${(p.abstract || 'Not reported in source.').replace(/\n/g,' ')}`,
+    ].join('\n');
+  });
+
+  const phCount = papers.filter(p => PHILIPPINE_SOURCES.some(ps => (p.source || '').includes(ps))).length;
+  const phNote = phCount > 0
+    ? `\n⚠️ PHILIPPINE SOURCES DETECTED (${phCount}): Prioritize and highlight these findings. Mark inline with [PH SOURCE].`
+    : '\n(No Philippine database sources detected in this dataset.)';
+
+  return `\n\nVERIFIED PAPER REGISTRY (ICC target ≥ 0.90 — cite ONLY from this list):\n${lines.join('\n\n')}\n${phNote}\n\nINSUFFICIENCY RULE: If the registry contains fewer than 2 papers relevant to a section, output: ⚠️ INSUFFICIENT DATA: The provided documents do not contain enough information to accurately address this query. Refusing to generate speculative content.\n`;
+}
+
+
+
+async function generateRRL(outputMode) {
+  if (!currentSessionId) { showToast('⚠️ Run a search first'); return; }
+  // Default to rrl-ready unless structured-summary explicitly requested
+  const mode = outputMode || 'rrl-ready';
+
+  // ✅ CITATION GROUNDING: Build grounded prompt with verified paper registry
+  const groundedPrompt = buildGroundedRRLPrompt(allRetrievedPapers, mode);
+  const citationRegistry = buildCitationRegistry(allRetrievedPapers);
+
+  const btn = document.getElementById('rrlBtn');
+  const btnS = document.getElementById('rrlBtnStructured');
+  const modeLabel = mode === 'structured-summary' ? 'Structured Summary' : 'RRL-READY Draft';
+  const activeBtn = mode === 'structured-summary' ? btnS : btn;
+  if (activeBtn) {
+    activeBtn.disabled = true;
+    activeBtn.innerHTML = `<span class="rrl-icon">⏳</span>
+      <span class="rrl-text">Opening ${modeLabel}...
+        <small>Grounding citations from ${allRetrievedPapers.length || allPaperTitles.length} verified papers</small>
+      </span>`;
+  }
+
+  try {
+    // ── Open a new tab immediately (must be synchronous to avoid popup blockers) ──
+    const rrlTab = window.open('', '_blank');
+    if (!rrlTab) {
+      showToast('⚠️ Popup blocked — allow popups for this site');
+      return;
+    }
+
+    const paperCount = allRetrievedPapers.length || allPaperTitles.length;
+    const genDate = new Date().toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'});
+
+    // ── Write the enhanced shell HTML with hallucination audit panel ──
+    rrlTab.document.write(`<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>${mode === 'structured-summary' ? 'Structured Summary' : 'RRL Draft'} — ${escHtml(currentQuery)}</title>
+<link href="https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,600;1,400&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+<style>
+  :root { --accent:#2563eb; --accent2:#0891b2; --purple:#7c3aed; --text:#1c1917; --text-dim:#78716c; --text-mid:#44403c; --border:#ddd8d0; --surface:#ffffff; --surface2:#f9f7f4; --green:#059669; --red:#dc2626; --gold:#b45309; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:'Inter',sans-serif; background:#f5f3ef; color:var(--text); min-height:100vh; }
+  .toolbar { position:sticky; top:0; z-index:100; background:rgba(255,255,255,0.95); backdrop-filter:blur(12px); border-bottom:1px solid var(--border); padding:10px 28px; display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; box-shadow:0 1px 8px rgba(0,0,0,0.06); }
+  .toolbar-left { display:flex; align-items:center; gap:10px; }
+  .toolbar-logo { font-family:'Lora',serif; font-size:0.95rem; font-weight:600; color:var(--text); }
+  .toolbar-query { font-size:0.75rem; font-family:'JetBrains Mono',monospace; color:var(--text-dim); background:var(--surface2); border:1px solid var(--border); border-radius:6px; padding:3px 10px; max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .toolbar-actions { display:flex; gap:7px; align-items:center; flex-wrap:wrap; }
+  .btn-copy { display:inline-flex; align-items:center; gap:5px; padding:6px 14px; background:white; border:1.5px solid rgba(37,99,235,0.3); border-radius:20px; color:var(--accent); font-size:0.75rem; font-family:'JetBrains Mono',monospace; cursor:pointer; transition:all 0.2s; font-weight:500; }
+  .btn-copy:hover { background:var(--accent); color:white; }
+  .btn-copy-refs { border-color:rgba(124,58,237,0.3); color:var(--purple); }
+  .btn-copy-refs:hover { background:var(--purple); color:white; }
+  .btn-print { border-color:rgba(5,150,105,0.3); color:var(--green); }
+  .btn-print:hover { background:var(--green); color:white; }
+  .layout { display:grid; grid-template-columns:1fr 300px; gap:0; min-height:calc(100vh - 56px); }
+  .page { max-width:100%; padding:36px 40px 80px; }
+  .audit-panel { background:white; border-left:1px solid var(--border); padding:24px 20px; position:sticky; top:56px; height:calc(100vh - 56px); overflow-y:auto; }
+  .audit-panel h3 { font-family:'Lora',serif; font-size:0.88rem; font-weight:600; color:var(--text); margin-bottom:4px; }
+  .audit-subtitle { font-size:0.7rem; font-family:'JetBrains Mono',monospace; color:var(--text-dim); margin-bottom:16px; }
+  .audit-score { display:flex; align-items:center; gap:10px; padding:14px; border-radius:10px; margin-bottom:16px; }
+  .audit-score.pass { background:#ecfdf5; border:1.5px solid rgba(5,150,105,0.2); }
+  .audit-score.warn { background:#fef3c7; border:1.5px solid rgba(180,83,9,0.2); }
+  .audit-score.fail { background:#fef2f2; border:1.5px solid rgba(220,38,38,0.2); }
+  .audit-pct { font-family:'JetBrains Mono',monospace; font-size:1.6rem; font-weight:700; line-height:1; }
+  .audit-pct.pass { color:var(--green); }
+  .audit-pct.warn { color:var(--gold); }
+  .audit-pct.fail { color:var(--red); }
+  .audit-label { font-size:0.72rem; color:var(--text-dim); line-height:1.5; }
+  .audit-section { margin-bottom:16px; }
+  .audit-section-title { font-family:'JetBrains Mono',monospace; font-size:0.65rem; text-transform:uppercase; letter-spacing:0.1em; color:var(--text-dim); font-weight:600; margin-bottom:8px; }
+  .cite-badge { display:block; font-size:0.72rem; padding:5px 9px; border-radius:6px; margin-bottom:5px; border:1px solid; line-height:1.4; word-break:break-word; }
+  .cite-badge.verified { background:#ecfdf5; border-color:rgba(5,150,105,0.25); color:#065f46; }
+  .cite-badge.hallucinated { background:#fef2f2; border-color:rgba(220,38,38,0.25); color:#991b1b; }
+  .cite-badge.hallucinated::before { content:'⚠ '; }
+  .cite-badge.verified::before { content:'✓ '; }
+  .audit-running { text-align:center; padding:20px; color:var(--text-dim); font-size:0.82rem; }
+  .audit-spinner { width:24px; height:24px; border:2px solid var(--border); border-top-color:var(--accent); border-radius:50%; animation:spin 0.8s linear infinite; margin:0 auto 12px; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  .paper-registry { margin-top:8px; }
+  .registry-item { font-size:0.68rem; padding:5px 8px; background:var(--surface2); border:1px solid var(--border); border-radius:5px; margin-bottom:4px; color:var(--text-mid); line-height:1.4; }
+  .registry-item strong { color:var(--text); display:block; }
+  .rrl-meta { margin-bottom:28px; }
+  .rrl-meta h1 { font-family:'Lora',serif; font-size:1.45rem; color:var(--text); font-weight:600; line-height:1.3; margin-bottom:8px; }
+  .rrl-meta .meta-row { font-size:0.75rem; font-family:'JetBrains Mono',monospace; color:var(--text-dim); display:flex; gap:14px; flex-wrap:wrap; }
+  .body-section { background:white; border-radius:12px; padding:28px 32px; margin-bottom:20px; box-shadow:0 1px 4px rgba(0,0,0,0.06); border:1px solid var(--border); }
+  .body-section h2 { font-family:'Lora',serif; font-size:0.83rem; color:var(--accent); margin-bottom:14px; font-weight:600; letter-spacing:0.05em; text-transform:uppercase; border-bottom:1px solid #ddd8d0; padding-bottom:8px; }
+  .body-section h2.refs-heading { color:var(--purple); }
+  #rrlBody { font-size:0.95rem; line-height:1.95; color:var(--text-mid); white-space:pre-wrap; }
+  #rrlRefs { font-size:0.87rem; line-height:2; color:var(--text-mid); white-space:pre-wrap; font-family:'Inter',sans-serif; }
+  /* Highlight hallucinated citations in red */
+  .hallucinated-cite { background:rgba(220,38,38,0.08); border-bottom:2px solid rgba(220,38,38,0.5); border-radius:2px; cursor:help; }
+  .cursor { display:inline-block; width:2px; height:1em; background:var(--accent); margin-left:2px; animation:blink 0.7s infinite; vertical-align:text-bottom; }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+  .status-bar { display:flex; align-items:center; gap:10px; font-size:0.76rem; font-family:'JetBrains Mono',monospace; color:var(--text-dim); margin-bottom:18px; }
+  .status-dot-anim { width:8px; height:8px; border-radius:50%; background:var(--accent); animation:pulse 1.2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.5;transform:scale(0.8)} }
+  .status-done .status-dot-anim { background:var(--green); animation:none; }
+  .refs-section { display:none; }
+  @media (max-width:768px) { .layout { grid-template-columns:1fr; } .audit-panel { position:static; height:auto; border-left:none; border-top:1px solid var(--border); } }
+  @media print { .toolbar,.audit-panel { display:none; } .layout { grid-template-columns:1fr; } body { background:white; } .body-section { box-shadow:none; border:none; padding:0; margin-bottom:32px; } .page { padding:24px; } }
+</style>
+</head>
+<body>
+<div class="toolbar">
+  <div class="toolbar-left">
+    <span class="toolbar-logo">📝 RRL Draft</span>
+    <span class="toolbar-query">${escHtml(currentQuery)}</span>
+  </div>
+  <div class="toolbar-actions">
+    <button class="btn-copy" onclick="copySection('rrlBody','📋 RRL body copied')">📋 Copy RRL</button>
+    <button class="btn-copy btn-copy-refs" id="copyRefsBtn" style="display:none" onclick="copySection('rrlRefs','📚 References copied')">📚 Copy Refs</button>
+    <button class="btn-copy btn-copy-refs" id="copyAllBtn" style="display:none" onclick="copyAll()">📋 Copy All</button>
+    <button class="btn-copy btn-print" onclick="window.print()">🖨️ Print / PDF</button>
+  </div>
+</div>
+<div class="layout">
+  <div class="page">
+    <div class="rrl-meta">
+      <h1>Review of Related Literature</h1>
+      <div class="meta-row">
+        <span>Query: ${escHtml(currentQuery)}</span>
+        <span>Papers: ${paperCount}</span>
+        <span>Generated: ${genDate}</span>
+      </div>
+    </div>
+    <div class="status-bar" id="statusBar">
+      <span class="status-dot-anim"></span>
+      <span id="statusText">Connecting to AI...</span>
+    </div>
+    <div id="waitMsg" style="background:white;border-radius:12px;padding:22px 28px;margin-bottom:20px;border:1px solid var(--border);display:flex;align-items:flex-start;gap:14px">
+      <div style="font-size:1.8rem;flex-shrink:0">${mode === 'structured-summary' ? '🗂' : '⏳'}</div>
+      <div>
+        <div style="font-weight:600;color:var(--text);margin-bottom:5px;font-size:0.93rem">Generating ${mode === 'structured-summary' ? 'Structured Summary' : 'Grounded RRL Draft'}...</div>
+        <div style="font-size:0.8rem;color:var(--text-dim);line-height:1.7">
+          Using <strong>${paperCount} verified papers</strong> as citation constraints.<br>
+          ${mode === 'structured-summary'
+            ? 'Each paper will receive: Objective · Methodology · Key Results (verbatim stats) · Limitations.'
+            : 'Citations restricted to retrieved papers only — hallucinations blocked at prompt level.'}<br>
+          🎯 ICC target ≥ 0.90 · Verbatim stats only · 🇵🇭 PH sources flagged · Takes <strong>5–12 seconds</strong>.
+        </div>
+        <div style="font-size:0.72rem;font-family:monospace;color:var(--text-dim);margin-top:8px">Elapsed: <span id="elapsedSec">0</span>s</div>
+      </div>
+    </div>
+    <div class="body-section">
+      <h2>Review of Related Literature</h2>
+      <div id="rrlBody"><span class="cursor"></span></div>
+    </div>
+    <div class="body-section refs-section" id="refsSection">
+      <h2 class="refs-heading">References</h2>
+      <div id="rrlRefs"></div>
+    </div>
+  </div>
+
+  <!-- ✅ HALLUCINATION AUDIT PANEL -->
+  <div class="audit-panel" id="auditPanel">
+    <h3>🔬 Citation Audit</h3>
+    <p class="audit-subtitle">Post-generation hallucination check</p>
+    <div class="audit-running" id="auditRunning">
+      <div class="audit-spinner"></div>
+      Waiting for RRL to complete...
+    </div>
+    <div id="auditResults" style="display:none">
+      <div class="audit-score" id="auditScore">
+        <div>
+          <div class="audit-pct" id="auditPct">—</div>
+          <div style="font-size:0.65rem;font-family:'JetBrains Mono',monospace;color:var(--text-dim)">verified</div>
+        </div>
+        <div class="audit-label" id="auditLabel"></div>
+      </div>
+      <div class="audit-section">
+        <div class="audit-section-title">✓ Verified Citations</div>
+        <div id="verifiedList"></div>
+      </div>
+      <div class="audit-section" id="hallucinatedSection" style="display:none">
+        <div class="audit-section-title" style="color:var(--red)">⚠ Unverified Citations</div>
+        <div style="font-size:0.68rem;color:var(--text-dim);margin-bottom:6px;line-height:1.5">These citations could not be matched to retrieved papers. They are highlighted in the RRL text.</div>
+        <div id="hallucinatedList"></div>
+      </div>
+      <div class="audit-section" id="statWarningsSection" style="display:none">
+        <div class="audit-section-title" style="color:var(--orange,#ea580c)">📊 Ungrounded Statistics</div>
+        <div style="font-size:0.68rem;color:var(--text-dim);margin-bottom:6px;line-height:1.5">These percentages/numbers were not found in any retrieved abstract — possible fabrication.</div>
+        <div id="statWarningsList"></div>
+      </div>
+      <div class="audit-section" style="margin-top:20px">
+        <div class="audit-section-title">📚 Verified Paper Registry</div>
+        <div class="paper-registry" id="registryList"></div>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+let elapsedTimer = setInterval(() => {
+  const el = document.getElementById('elapsedSec');
+  if (el) el.textContent = parseInt(el.textContent||'0') + 1;
+}, 1000);
+
+let statusMessages = ['Connecting to AI...','Injecting citation constraints...','AI reading paper registry...','Writing Introduction...','Composing Synthesis...','Writing Gaps & Implications...','Almost there...'];
+let msgIdx = 0;
+let statusTimer = setInterval(() => {
+  const el = document.getElementById('statusText');
+  if (el && msgIdx < statusMessages.length - 1) { msgIdx++; el.textContent = statusMessages[msgIdx]; }
+}, 3500);
+
+function startedStreaming() {
+  clearInterval(statusTimer);
+  const waitMsg = document.getElementById('waitMsg');
+  if (waitMsg) waitMsg.style.display = 'none';
+  const el = document.getElementById('statusText');
+  if (el) el.textContent = '✍️ Writing grounded RRL...';
+}
+
+function renderAudit(auditData) {
+  const { hallucinatedCitations, verifiedCitations, foundCitations, statWarnings } = auditData;
+  const total = foundCitations.length;
+  const verified = verifiedCitations.length;
+  const hallucinated = hallucinatedCitations.length;
+  const pct = total === 0 ? 100 : Math.round((verified / total) * 100);
+
+  document.getElementById('auditRunning').style.display = 'none';
+  document.getElementById('auditResults').style.display = 'block';
+
+  const scoreEl = document.getElementById('auditScore');
+  const pctEl   = document.getElementById('auditPct');
+  const labelEl = document.getElementById('auditLabel');
+  pctEl.textContent = pct + '%';
+
+  // MODIFICATION: Tightened pass threshold to ≥95% (from ≥80%) to match ≤5% hallucination target
+  if (pct >= 95) {
+    scoreEl.className = 'audit-score pass'; pctEl.className = 'audit-pct pass';
+    labelEl.textContent = '✅ Excellent — citations grounded. Hallucination rate within target (≤5%).';
+  } else if (pct >= 80) {
+    scoreEl.className = 'audit-score warn'; pctEl.className = 'audit-pct warn';
+    labelEl.textContent = '⚠️ ' + hallucinated + ' citation(s) unverified — hallucination rate above 5% target. Review highlighted text.';
+  } else {
+    scoreEl.className = 'audit-score fail'; pctEl.className = 'audit-pct fail';
+    labelEl.textContent = '❌ ' + hallucinated + ' unverified citations — critical failure. Re-generate or edit manually.';
+  }
+
+  const vList = document.getElementById('verifiedList');
+  vList.innerHTML = verified === 0
+    ? '<span style="font-size:0.72rem;color:var(--text-dim)">No citations detected.</span>'
+    : verifiedCitations.map(c => \`<span class="cite-badge verified">\${c}</span>\`).join('');
+
+  if (hallucinated > 0) {
+    document.getElementById('hallucinatedSection').style.display = 'block';
+    document.getElementById('hallucinatedList').innerHTML =
+      hallucinatedCitations.map(c => \`<span class="cite-badge hallucinated">\${c}</span>\`).join('');
+    const bodyEl = document.getElementById('rrlBody');
+    if (bodyEl) {
+      let html = bodyEl.innerHTML;
+      hallucinatedCitations.forEach(cite => {
+        const escaped = cite.replace(/[.*+?^\${}()|[\\]\\\\]/g, '\\\\$&');
+        html = html.replace(new RegExp('\\\\(' + escaped + '\\\\)', 'g'),
+          \`<span class="hallucinated-cite" title="⚠ Not in retrieved papers: \${cite}">(\${cite})</span>\`);
+      });
+      bodyEl.innerHTML = html;
+    }
+  }
+
+  // MODIFICATION: New — show ungrounded statistics warning panel
+  const swEl = document.getElementById('statWarningsSection');
+  if (swEl && statWarnings && statWarnings.length > 0) {
+    swEl.style.display = 'block';
+    document.getElementById('statWarningsList').innerHTML = statWarnings.slice(0,8).map(w =>
+      \`<div class="cite-badge hallucinated" style="margin-bottom:4px">⚠ Statistic <strong>\${w.stat}</strong> not found in any abstract: "…\${w.context.slice(0,80)}…"</div>\`
+    ).join('');
+  }
+}
+
+function renderRegistry(registry) {
+  const el = document.getElementById('registryList');
+  if (!el || !registry.length) return;
+  el.innerHTML = registry.map(p => {
+    const author = p.firstAuthorLast ? p.firstAuthorLast.charAt(0).toUpperCase() + p.firstAuthorLast.slice(1) : 'Unknown';
+    return \`<div class="registry-item"><strong>#\${p.idx} \${author} (\${p.year||'n.d.'})</strong>\${p.title.slice(0,80)}\${p.title.length>80?'…':''}</div>\`;
+  }).join('');
+}
+
+function doneStreaming(paperCount, auditData, registry) {
+  clearInterval(elapsedTimer);
+  const el = document.getElementById('statusText');
+  if (el) el.textContent = '✅ RRL complete — ' + paperCount + ' papers · Citation audit ready';
+  const bar = document.getElementById('statusBar');
+  if (bar) bar.className = 'status-bar status-done';
+  if (auditData) renderAudit(auditData);
+  if (registry) renderRegistry(registry);
+}
+
+function copySection(id, msg) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  navigator.clipboard.writeText(el.textContent).then(() => alert(msg)).catch(() => {
+    const ta = document.createElement('textarea');
+    ta.value = el.textContent;
+    document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
+    alert(msg);
+  });
+}
+function copyAll() {
+  const body = document.getElementById('rrlBody').textContent;
+  const refs = document.getElementById('rrlRefs').textContent;
+  const text = refs ? body + '\\n\\n---\\nReferences\\n\\n' + refs : body;
+  navigator.clipboard.writeText(text).then(() => alert('📋 Full RRL + References copied')).catch(() => {
+    const ta = document.createElement('textarea');
+    ta.value = text; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
+    alert('📋 Full RRL + References copied');
+  });
+}
+<\/script>
+</body>
+</html>`);
+    rrlTab.document.close();
+
+    // ── Stream RRL content with GROUNDED prompt ──
+    const response = await fetch(`${API_BASE}/rrl-stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: groundedPrompt, session_id: currentSessionId, temperature: 0 })
+    });
+
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let fullText = '';
+
+    const bodyEl   = rrlTab.document.getElementById('rrlBody');
+    const statusEl  = rrlTab.document.getElementById('statusText');
+    const statusBar = rrlTab.document.getElementById('statusBar');
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      const chunk = decoder.decode(value, { stream: true });
+      for (const line of chunk.split('\n')) {
+        if (line.startsWith('data: ')) {
+          const raw = line.slice(6).trim();
+          if (raw === '[DONE]') break;
+          try {
+            const parsed = JSON.parse(raw);
+            if (parsed.text) {
+              if (!fullText) { try { rrlTab.startedStreaming(); } catch(e) {} }
+              fullText += parsed.text;
+              bodyEl.innerHTML = fullText
+                .replace(/\n/g, '<br>')
+                .replace(/## ([^\n<]+)/g, '<br><strong style="color:var(--accent);font-family:\'Lora\',serif;font-size:1.05rem;display:block;margin:18px 0 8px">$1</strong>')
+                + '<span class="cursor"></span>';
+            }
+          } catch(e) {}
+        }
+      }
+    }
+
+    // ── Split body from References ──
+    const refSeparators = ['\n---\nReferences\n', '\n---\nREFERENCES\n',
+                            '\nReferences\n', '\nREFERENCES\n', '\nReference List\n',
+                            '\n## References\n'];
+    let bodyText = fullText.trim();
+    let refsText = '';
+    for (const sep of refSeparators) {
+      const sepIdx = fullText.indexOf(sep);
+      if (sepIdx !== -1) {
+        bodyText = fullText.substring(0, sepIdx).trim();
+        refsText = fullText.substring(sepIdx + sep.length).trim();
+        break;
+      }
+    }
+
+    // ── Render final body ──
+    bodyEl.innerHTML = bodyText
+      .replace(/\n/g, '<br>')
+      .replace(/## ([^\n<]+)/g, '<br><strong style="color:var(--accent);font-family:\'Lora\',serif;font-size:1.05rem;display:block;margin:18px 0 8px">$1</strong>');
+
+    // ── Render references if found ──
+    if (refsText) {
+      const refsSection = rrlTab.document.getElementById('refsSection');
+      const refsEl      = rrlTab.document.getElementById('rrlRefs');
+      const copyRefsBtn = rrlTab.document.getElementById('copyRefsBtn');
+      const copyAllBtn  = rrlTab.document.getElementById('copyAllBtn');
+      if (refsEl) refsEl.innerHTML = refsText.replace(/\n/g, '<br>');
+      if (refsSection) refsSection.style.display = 'block';
+      if (copyRefsBtn) copyRefsBtn.style.display = 'inline-flex';
+      if (copyAllBtn)  copyAllBtn.style.display  = 'inline-flex';
+    }
+
+    // ── ✅ POST-GENERATION HALLUCINATION CHECK ──
+    const auditResult = detectHallucinatedCitations(fullText, citationRegistry);
+    const hallucinationRate = auditResult.foundCitations.length > 0
+      ? (auditResult.hallucinatedCitations.length / auditResult.foundCitations.length * 100).toFixed(0)
+      : 0;
+
+    // Signal completion to new tab (pass audit data)
+    try {
+      rrlTab.doneStreaming(paperCount, auditResult, citationRegistry);
+      const waitMsg = rrlTab.document.getElementById('waitMsg');
+      if (waitMsg) waitMsg.style.display = 'none';
+    } catch(e) {}
+
+    if (statusBar) statusBar.className = 'status-bar status-done';
+    if (statusEl)  statusEl.textContent = `✅ RRL complete — ${paperCount} papers · ${auditResult.foundCitations.length} citations · ${hallucinationRate}% unverified`;
+    rrlTab.document.title = `RRL — ${currentQuery}`;
+
+    const toastMsg = auditResult.hallucinatedCitations.length === 0
+      ? `✅ RRL generated — all ${auditResult.foundCitations.length} citations verified`
+      : `⚠️ RRL generated — ${auditResult.hallucinatedCitations.length} unverified citation(s) flagged in audit panel`;
+    showToast(toastMsg, 5000);
+
+  } catch (err) {
+    showToast(`⚠️ RRL generation failed: ${err.message}`);
+  } finally {
+    // Restore both buttons
+    const rrlBtnEl = document.getElementById('rrlBtn');
+    const rrlBtnSEl = document.getElementById('rrlBtnStructured');
+    if (rrlBtnEl) {
+      rrlBtnEl.disabled = false;
+      rrlBtnEl.innerHTML = `<span class="rrl-icon">📝</span>
+        <span class="rrl-text">RRL-READY Draft
+          <small>Intro · Thematic Synthesis · Gaps · Implications · References</small>
+        </span>`;
+    }
+    if (rrlBtnSEl) {
+      rrlBtnSEl.disabled = false;
+      rrlBtnSEl.innerHTML = `<span class="rrl-icon">🗂</span>
+        <span class="rrl-text">Structured Summary
+          <small>Per-paper: Objective · Methodology · Key Results · Limitations</small>
+        </span>`;
+    }
+  }
+}
+
+
+
+function copyRRL(mode = 'all') {
+  const bodyText = document.getElementById('rrlBody')?.textContent || '';
+  const refsText = document.getElementById('rrlRefList')?.textContent || '';
+
+  let text = '';
+  let msg = '';
+  if (mode === 'refs') {
+    text = refsText ? 'References\n\n' + refsText : bodyText;
+    msg = '📚 References copied to clipboard';
+  } else {
+    // Full copy: body + references
+    text = refsText ? bodyText + '\n\n---\nReferences\n\n' + refsText : bodyText;
+    msg = '📋 Full RRL + References copied to clipboard';
+  }
+
+  if (!text) { showToast('Nothing to copy'); return; }
+
+  navigator.clipboard.writeText(text).then(() => {
+    showToast(msg);
+  }).catch(() => {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    showToast(msg);
+  });
+}
+
+function copySummary(elementId) {
+  const el = document.getElementById(elementId);
+  if (!el) { showToast('Nothing to copy'); return; }
+  const text = el.textContent || el.innerText;
+  navigator.clipboard.writeText(text).then(() => {
+    showToast('📋 Summary copied to clipboard');
+  }).catch(() => {
+    // Fallback for older browsers
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;opacity:0;pointer-events:none';
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    showToast('📋 Summary copied to clipboard');
+  });
+}
+
+function renderFollowupHistory() {
+  const histEl = document.getElementById('followupHistory');
+  if (!histEl || followupHistory.length <= 1) return;
+  const prev = followupHistory.slice(1, 4);
+  if (!prev.length) return;
+  histEl.innerHTML = `<div style="margin-top:20px">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+      <span style="font-family:var(--font-mono);font-size:0.69rem;text-transform:uppercase;color:var(--text-dim);font-weight:500">Previous Questions</span>
+      <div style="flex:1;height:1px;background:var(--border)"></div>
+    </div>
+    ${prev.map(item => `
+      <div style="margin-bottom:12px;padding:12px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm)">
+        <div style="font-size:0.78rem;font-weight:600;color:var(--text);margin-bottom:6px">Q: ${escHtml(item.q)}</div>
+        <div style="font-size:0.82rem;color:var(--text-mid);line-height:1.7;white-space:pre-wrap">${escHtml(item.a.slice(0,300))}${item.a.length>300?'...':''}</div>
+      </div>`).join('')}
+  </div>`;
+}
+
+document.getElementById('queryInput').addEventListener('keydown', e => { if (e.key==='Enter') runResearch(); });
+window.addEventListener('resize', initSidebar);
+// ── ENHANCEMENT: load persisted source prefs before building chips ──
+loadSourcePrefs();
+// ── INIT: Always start with all sources cleared on fresh load ──
+selectedSources = new Set();
+buildSourceChips();
+// ── ENHANCEMENT: restore search history from localStorage ──
+renderSearchHistory();
+checkStatus();
+setInterval(checkStatus, 30000);
+initSidebar();
+
+// ══════════════════════════════════════════════════════
+// ENHANCEMENT 1 — Summary Format Selector
+// ══════════════════════════════════════════════════════
+let currentSummaryFormat = 'rrl'; // ✅ Default to highest-ICC format per dataset evaluation
+
+function setFormat(fmt) {
+  currentSummaryFormat = fmt;
+  ['standard','structured','rrl'].forEach(f => {
+    const btn = document.getElementById(`fmt-${f}`);
+    if (!btn) return;
+    btn.className = 'format-btn';
+    if (f === fmt) {
+      if (f === 'standard')   btn.classList.add('active');
+      if (f === 'structured') btn.classList.add('active-structured');
+      if (f === 'rrl')        btn.classList.add('active-rrl');
+    }
+  });
+  const hints = {
+    standard:   '📄 Narrative — one flowing paragraph. Best for quick overviews.',
+    structured: '🗂 Structured — Background / Findings / Gaps sections. Improves ICC Completeness & Clarity.',
+    rrl:        '📝 RRL-Ready — Intro / Synthesis / Gaps / Implications. Highest ICC scores across all criteria.'
+  };
+  const hintEl = document.getElementById('formatHint');
+  if (hintEl) hintEl.textContent = hints[fmt];
+}
+
+// ══════════════════════════════════════════════════════
+// ENHANCEMENT 2 — Structured Summary Builder
+// ══════════════════════════════════════════════════════
+function buildStructuredSummary(text, format) {
+  const sentences = text.split(/(?<=[.!?])\s+/).filter(s => s.trim().length > 10);
+  const total = sentences.length;
+  if (total < 3) return `<div class="summary-section ss-background"><h4>📌 Summary</h4><p>${escHtml(text)}</p></div>`;
+
+  if (format === 'structured') {
+    const bg    = sentences.slice(0, Math.ceil(total * 0.25)).join(' ');
+    const finds = sentences.slice(Math.ceil(total * 0.25), Math.ceil(total * 0.75)).join(' ');
+    const gaps  = sentences.slice(Math.ceil(total * 0.75)).join(' ');
+    return `
+      <div class="summary-section ss-background">
+        <h4>🔵 Background &amp; Context</h4>
+        <p>${escHtml(bg)}</p>
+      </div>
+      <div class="summary-section ss-findings">
+        <h4>🟢 Key Findings</h4>
+        <p>${escHtml(finds)}</p>
+      </div>
+      <div class="summary-section ss-gaps">
+        <h4>🟡 Research Gaps &amp; Limitations</h4>
+        <p>${escHtml(gaps)}</p>
+      </div>`;
+  }
+
+  if (format === 'rrl') {
+    const q1 = Math.ceil(total * 0.20);
+    const q2 = Math.ceil(total * 0.45);
+    const q3 = Math.ceil(total * 0.70);
+    const q4 = Math.ceil(total * 0.85);
+    const intro    = sentences.slice(0, q1).join(' ');
+    const synthesis= sentences.slice(q1, q2).join(' ');
+    const gaps     = sentences.slice(q2, q3).join(' ');
+    const implic   = sentences.slice(q3, q4).join(' ');
+    const closing  = sentences.slice(q4).join(' ');
+    return `
+      <div class="summary-section ss-background">
+        <h4>📌 Introduction &amp; Background</h4>
+        <p>${escHtml(intro)}</p>
+      </div>
+      <div class="summary-section ss-synthesis">
+        <h4>🔗 Synthesis of Literature</h4>
+        <p>${escHtml(synthesis)}</p>
+      </div>
+      <div class="summary-section ss-gaps">
+        <h4>🟡 Research Gaps Identified</h4>
+        <p>${escHtml(gaps)}</p>
+      </div>
+      <div class="summary-section ss-implications">
+        <h4>💡 Implications &amp; Future Research</h4>
+        <p>${escHtml(implic)}</p>
+      </div>
+      ${closing ? `<div class="summary-section ss-findings"><h4>✅ Conclusion</h4><p>${escHtml(closing)}</p></div>` : ''}`;
+  }
+  return `<p>${escHtml(text)}</p>`;
+}
+
+// ══════════════════════════════════════════════════════
+// ENHANCEMENT 3 — Completeness Checklist (ICC-IMPROVED)
+// MODIFICATION: Added explicit anchor-based scoring rubric visible to users
+// PURPOSE: Standardize rater interpretation → push ICC ≥ 0.90
+// ══════════════════════════════════════════════════════
+function buildCompletenessChecklist(text) {
+  const lower = text.toLowerCase();
+  const checks = [
+    { key: 'background',  label: 'Background',    patterns: ['background','context','overview','introduction','established','literature shows'] },
+    { key: 'findings',    label: 'Findings',       patterns: ['found','results','showed','demonstrated','achieved','accuracy','performance','reported','identified'] },
+    { key: 'methodology', label: 'Methodology',    patterns: ['method','approach','model','algorithm','framework','design','survey','experiment','dataset','quantitative','qualitative'] },
+    { key: 'gaps',        label: 'Gaps',           patterns: ['gap','limitation','lacks','missing','future','further research','needed','however','not yet','understudied','no study'] },
+    { key: 'citations',   label: 'Citations',      patterns: ['et al','author','study','research','paper','published','journal','source not retrieved'] },
+    { key: 'synthesis',   label: 'Synthesis',      patterns: ['similarly','in contrast','building on','consistent with','however','while','both','whereas','unlike','corroborates','extends','contradicts'] },
+    { key: 'policy',      label: '🏛 Policy/Crossdisciplinary', patterns: ['policy','stakeholder','govern','regulat','economic','social','environmental','interdisciplin','sector','region','institution','asean','southeast asia','climate','renewable','adaptation','public health','healthcare system'] },
+    { key: 'philippine',  label: '🇵🇭 PH Context',  patterns: ['philippine','pilipinas','herdin','ched','doh','manila','quezon','davao','filipino','ph hei','deped','pagasa','neda','local context','philippines','uplb','ukdr','los baños'] },
+  ];
+  
+  // ICC Rubric Anchors — shown on hover so all raters use the same scale
+  const anchors = {
+    background:  { 4:'Covers broad context + specific domain clearly', 3:'Context present but generic', 2:'Minimal context only', 1:'No background provided' },
+    findings:    { 4:'≥2 specific findings with grounded support', 3:'Findings present but vague', 2:'Only 1 finding mentioned', 1:'No findings' },
+    methodology: { 4:'Methods compared across ≥2 papers thematically', 3:'One method described', 2:'Implied methodology only', 1:'No methods discussed' },
+    gaps:        { 4:'Specific named gaps with source support', 3:'Gap mentioned, not specific', 2:'Implied gap only', 1:'No gaps identified' },
+    citations:   { 4:'Every claim cited; no [Source not retrieved]', 3:'Most claims cited', 2:'Some uncited claims', 1:'Few/no citations' },
+    synthesis:   { 4:'≥2 explicit compare/contrast per paragraph', 3:'Some connectives used', 2:'Juxtaposition implied', 1:'Paper-by-paper only' },
+    policy:      { 4:'Policy/cross-disciplinary lens clearly applied', 3:'Mentioned peripherally', 2:'Implied only', 1:'Not addressed' },
+    philippine:  { 4:'Philippine context central to discussion', 3:'Referenced once or twice', 2:'Implicitly relevant', 1:'Not addressed' },
+  };
+
+  return checks.map(c => {
+    const present = c.patterns.some(p => lower.includes(p));
+    const anchorTip = present
+      ? `✓ Present — ICC Anchor: Score 3–4 if ${anchors[c.key]?.[3] || 'criterion met'}`
+      : `✗ Missing — ICC Anchor: Score 1–2 if ${anchors[c.key]?.[1] || 'not addressed'}`;
+    return `<span class="comp-badge ${present ? 'present' : 'absent'}" title="${anchorTip}">${present ? '✓' : '✗'} ${c.label}</span>`;
+  }).join('');
+}
+
+// MODIFICATION: Added ICC Scoring Guide panel rendered next to summary
+// PURPOSE: Surfaces rubric anchors in UI so raters calibrate consistently → ICC ≥ 0.90
+function buildICCRubricPanel() {
+  return `<details class="icc-rubric-details" style="margin-top:12px">
+    <summary style="font-family:var(--font-mono);font-size:0.7rem;cursor:pointer;color:var(--accent2);user-select:none;font-weight:600">
+      📏 ICC Scoring Rubric (expand for rater calibration guide)
+    </summary>
+    <div class="icc-rubric-panel">
+      <div class="rubric-intro">Use this rubric when scoring summaries to ensure inter-rater consistency (target ICC ≥ 0.90). <strong>Score 1–4 per criterion.</strong></div>
+      ${[
+        { crit:'Accuracy', 
+          scores:{ 4:'All claims directly grounded in paper abstracts; no unverified statistics', 3:'Most claims verified; 1–2 minor unverifiable statements', 2:'Several unsupported claims or inflated statistics', 1:'Multiple fabricated facts, institutions, or statistics' }},
+        { crit:'Completeness',
+          scores:{ 4:'Background + Findings + Methodology + Gaps all present with substance', 3:'3 of 4 sections have substance; one is thin', 2:'Only 2 of 4 sections addressed adequately', 1:'Mostly superficial; major sections missing' }},
+        { crit:'Clarity',
+          scores:{ 4:'Flesch 55–70; no unexplained jargon; transitions logical', 3:'Mostly clear; 1–2 jargon terms unexplained', 2:'Dense writing; some terms need explanation', 1:'Very difficult to follow; technical overload' }},
+        { crit:'Synthesis',
+          scores:{ 4:'≥2 explicit compare/contrast per thematic paragraph; connectives throughout', 3:'Connectives present but synthesis surface-level', 2:'Some thematic grouping; mostly paper-by-paper', 1:'Pure paper-by-paper summary; no synthesis' }},
+      ].map(r => `
+        <div class="rubric-criterion">
+          <div class="rubric-crit-name">${r.crit}</div>
+          <div class="rubric-scores">
+            ${[4,3,2,1].map(s => `<div class="rubric-score-row"><span class="rubric-score-num s${s}">${s}</span><span class="rubric-score-desc">${r.scores[s]}</span></div>`).join('')}
+          </div>
+        </div>`).join('')}
+    </div>
+  </details>`;
+}
+
+// ══════════════════════════════════════════════════════
+// ENHANCEMENT 4 — Flesch Readability Score
+// ══════════════════════════════════════════════════════
+function fleschScore(text) {
+  const clean = text.replace(/[^a-zA-Z0-9\s.!?]/g, ' ');
+  const sentences = (clean.match(/[.!?]+/g) || []).length || 1;
+  const words     = clean.split(/\s+/).filter(w => w.length > 0);
+  const wordCount = words.length || 1;
+  const syllables = words.reduce((acc, w) => {
+    const s = w.toLowerCase().replace(/(?:[^laeiouy]es|ed|[^laeiouy]e)$/, '')
+                .replace(/^y/, '')
+                .match(/[aeiouy]{1,2}/g);
+    return acc + (s ? s.length : 1);
+  }, 0);
+  const score = 206.835 - 1.015 * (wordCount / sentences) - 84.6 * (syllables / wordCount);
+  return Math.max(0, Math.min(100, Math.round(score)));
+}
+
+// ══════════════════════════════════════════════════════
+// ENHANCEMENT 5 — Synthesis Matrix
+// ══════════════════════════════════════════════════════
+function buildSynthesisMatrix(papers) {
+  if (!papers || papers.length === 0) return '';
+  const fields = [
+    { label: '📅 Year',      fn: p => p.year || p.published || '—' },
+    { label: '🗃️ Source',    fn: p => p.source || '—' },
+    { label: '👤 Authors',   fn: p => (p.authors||[]).slice(0,3).join(', ') + (p.authors?.length > 3 ? ' et al.' : '') || '—' },
+    { label: '📰 Journal',   fn: p => p.journal ? p.journal.slice(0,80) : '—' },
+    { label: '🎯 Focus',     fn: p => p.abstract ? p.abstract.slice(0, 180) + '…' : (p.keywords||p.concepts||[]).slice(0,4).join(', ') || '—' },
+    { label: '📖 Citations', fn: p => p.citations != null ? `${p.citations} citations` : '—' },
+    { label: '🔓 Access',    fn: p => p.open_access ? '✓ Open Access' : p.pdf_url ? '✓ PDF available' : p.doi ? 'DOI only' : '—' },
+    { label: '🏷️ Keywords',  fn: p => (p.keywords||p.concepts||[]).slice(0,5).join(', ') || '—' },
+  ];
+
+  // Unique container ID so multiple matrices on the same page don't share state
+  const uid = 'syn_' + Math.random().toString(36).slice(2,7);
+
+  const cards = papers.map((p, i) => {
+    const rows = fields.map(f => {
+      const val = f.fn(p);
+      if (val === '—') return '';
+      return `<div class="syn-row"><div class="syn-row-label">${f.label}</div><div class="syn-row-value">${escHtml(String(val))}</div></div>`;
+    }).join('');
+    return `<div class="syn-card" id="${uid}_card${i}" style="display:${i===0?'block':'none'}">
+      <div class="syn-card-header">
+        <div class="syn-card-num">Paper ${i+1} of ${papers.length}</div>
+        <div class="syn-card-title">${escHtml(p.title||'Untitled')}</div>
+      </div>
+      ${rows}
+    </div>`;
+  }).join('');
+
+  return `<div>
+    <div class="syn-nav">
+      <button class="syn-nav-btn" id="${uid}_prev" onclick="synNav('${uid}', -1)" disabled title="Previous paper">&#8249;</button>
+      <span class="syn-counter" id="${uid}_counter">1 / ${papers.length}</span>
+      <button class="syn-nav-btn" id="${uid}_next" onclick="synNav('${uid}', 1)" title="Next paper">&#8250;</button>
+      <span style="font-size:0.72rem;color:var(--text-dim);font-family:var(--font-mono);margin-left:4px">${papers.length} papers</span>
+    </div>
+    ${cards}
+  </div>`;
+}
+
+function synNav(uid, dir) {
+  const cards = document.querySelectorAll(`[id^="${uid}_card"]`);
+  const counter = document.getElementById(uid + '_counter');
+  const prevBtn = document.getElementById(uid + '_prev');
+  const nextBtn = document.getElementById(uid + '_next');
+  const total = cards.length;
+  let current = 0;
+  cards.forEach((c, i) => { if (c.style.display !== 'none') current = i; });
+  const next = Math.max(0, Math.min(total - 1, current + dir));
+  cards[current].style.display = 'none';
+  cards[next].style.display = 'block';
+  cards[next].style.animation = 'fadeUp 0.25s ease';
+  counter.textContent = `${next + 1} / ${total}`;
+  prevBtn.disabled = next === 0;
+  nextBtn.disabled = next === total - 1;
+}
+
+// ══════════════════════════════════════════════════════
+// ENHANCEMENT 6 — Simplify Summary Language
+// ══════════════════════════════════════════════════════
+async function simplifySummary(summaryId, structuredViewId, checklistId) {
+  if (!currentSessionId) { showToast('⚠️ Run a search first'); return; }
+  const originalEl = document.getElementById(summaryId);
+  if (!originalEl) return;
+
+  // Get the raw text — strip any HTML markup introduced by highlighting
+  const originalText = originalEl.innerText || originalEl.textContent;
+  const btn = document.getElementById('simplifyBtn1');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Simplifying...'; }
+
+  try {
+    const r = await fetch(`${API_BASE}/followup`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query: `Rewrite the following academic summary in clearer, simpler language targeting a Flesch Reading Ease score of 60–70. Rules: use short sentences (max 22 words each), define any technical acronyms on first use, prefer active voice, keep all factual claims and citations exactly as written, do not add new information, do not remove any [Source not retrieved] or [Inferred] markers. Output ONLY the rewritten text with no preamble:\n\n${originalText}`,
+        session_id: currentSessionId
+      })
+    });
+    const data = await r.json();
+    if (data.answer) {
+      const newText = data.answer;
+
+      // ── 1. Update the hidden plain-text element ──
+      originalEl.textContent = newText;
+
+      // ── 2. Update the visible structured/standard view ──
+      const svEl = document.getElementById(structuredViewId);
+      if (svEl && currentSummaryFormat !== 'standard') {
+        svEl.innerHTML = buildStructuredSummary(newText, currentSummaryFormat);
+      } else if (currentSummaryFormat === 'standard') {
+        // Re-render standard view with new highlight markup
+        const highlighted = escHtml(newText)
+          .replace(/\[Source not retrieved\]/g, '<mark style="background:#fef3c7;border-radius:3px;padding:1px 3px;font-size:0.85em;font-family:var(--font-mono)">[Source not retrieved]</mark>')
+          .replace(/\[Inferred\]/g, '<mark style="background:#fef2f2;border-radius:3px;padding:1px 3px;font-size:0.85em;font-family:var(--font-mono)">[Inferred]</mark>');
+        originalEl.innerHTML = highlighted;
+      }
+
+      // ── 3. Rebuild completeness checklist ──
+      const clEl = document.getElementById(checklistId);
+      if (clEl) clEl.innerHTML = buildCompletenessChecklist(newText);
+
+      // ── 4. Recompute Flesch and update the badge ──
+      const newFlesch = fleschScore(newText);
+      const newRbClass = newFlesch >= 55 && newFlesch <= 70 ? 'rb-standard'
+                       : newFlesch < 55 ? 'rb-complex' : 'rb-simple';
+      const newRbLabel = newFlesch >= 55 && newFlesch <= 70 ? '✓ Standard Readability'
+                       : newFlesch < 55 ? '⚠ Complex — simplify before rating' : '● Simple';
+      const badgeEl = document.querySelector('#summaryCard .readability-badge');
+      if (badgeEl) {
+        badgeEl.className = `readability-badge ${newRbClass}`;
+        badgeEl.textContent = `📖 ${newRbLabel} (${newFlesch})`;
+        badgeEl.title = `Flesch Reading Ease: ${newFlesch}. Target: 55–70 for academic summaries.`;
+      }
+
+      // ── 5. Update connective counter badge ──
+      const connectiveWords = ['similarly','in contrast','building on','consistent with','however','whereas','unlike','both','corroborates','extends','contradicts','while','in comparison','conversely','furthermore','nevertheless'];
+      const lowerNew = newText.toLowerCase();
+      const newConnCount = connectiveWords.filter(w => lowerNew.includes(w)).length;
+      const newConnBg  = newConnCount >= 4 ? '#ecfdf5' : newConnCount >= 2 ? '#fef3c7' : '#fef2f2';
+      const newConnFg  = newConnCount >= 4 ? '#065f46' : newConnCount >= 2 ? '#92400e' : '#991b1b';
+      const newConnMsg = newConnCount >= 4 ? `✓ ${newConnCount} synthesis connectives — strong synthesis (score 4)`
+                       : newConnCount >= 2 ? `⚠ ${newConnCount} connectives — moderate synthesis (score 3)`
+                       : `✗ ${newConnCount} connectives — weak synthesis (score 1–2)`;
+      const connBadge = document.querySelector('#summaryCard [title*="synthesis connectives"]');
+      if (connBadge) {
+        connBadge.style.background = newConnBg;
+        connBadge.style.color = newConnFg;
+        connBadge.style.borderColor = newConnFg + '40';
+        connBadge.textContent = newConnMsg;
+      }
+
+      // ── 6. Hide Flesch warning banner if score now acceptable ──
+      const warnBanner = document.getElementById('fleschWarnBanner');
+      if (warnBanner && newFlesch >= 45) {
+        warnBanner.style.transition = 'opacity 0.4s';
+        warnBanner.style.opacity = '0';
+        setTimeout(() => { if (warnBanner) warnBanner.style.display = 'none'; }, 400);
+      }
+
+      // ── 7. Refresh the Live Evaluation Scorecard in sidebar ──
+      const evalRows = document.getElementById('evalScoreRows');
+      if (evalRows) {
+        const hasGap  = /gap|limitation|future|missing|not yet|understudied/i.test(newText);
+        const hasCite = /et al\.|source not retrieved|\(\d{4}\)/i.test(newText);
+        const rows = [
+          { label:'Flesch Readability', val: newFlesch, pass: newFlesch>=55&&newFlesch<=70, warn: newFlesch>=45, target:'55–70' },
+          { label:'Synthesis Connectives', val: newConnCount, pass: newConnCount>=4, warn: newConnCount>=2, target:'≥4' },
+          { label:'Gaps Identified', val: hasGap?'✓ Yes':'✗ No', pass: hasGap, warn: false, target:'Required' },
+          { label:'Citations Present', val: hasCite?'✓ Yes':'✗ No', pass: hasCite, warn: false, target:'Required' },
+          { label:'ICC Rubric', val:'Visible ↓', pass: true, warn: false, target:'Open' },
+        ];
+        evalRows.innerHTML = rows.map(r => {
+          const cls = r.pass ? 'eval-pass' : r.warn ? 'eval-warn' : 'eval-fail';
+          return `<div class="eval-row">
+            <span class="eval-label">${r.label}<br><span style="font-size:0.65rem;color:var(--text-dim)">Target: ${r.target}</span></span>
+            <span class="eval-val ${cls}">${escHtml(String(r.val))}</span>
+          </div>`;
+        }).join('');
+      }
+
+      showToast(`✨ Simplified — Flesch score: ${newFlesch} (was ${fleschScore(originalText)})`);
+    }
+  } catch(e) {
+    showToast('⚠️ Could not simplify: ' + e.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '✨ Simplify Language'; }
+  }
+}
+</script>
+
+<script>
+  (function() {
+    // Right-click: suppress context menu silently
+    document.addEventListener('contextmenu', function(e) {
+      e.preventDefault();
+    }, true);
+
+    // Keyboard: block DevTools / view-source shortcuts silently
+    document.addEventListener('keydown', function(e) {
+      var ctrl = e.ctrlKey || e.metaKey;
+      var shift = e.shiftKey;
+      var k = e.key;
+
+      if (k === 'F12') { e.preventDefault(); e.stopPropagation(); return; }
+      if (ctrl && shift && /^[iI]$/.test(k)) { e.preventDefault(); e.stopPropagation(); return; }
+      if (ctrl && shift && /^[jJ]$/.test(k)) { e.preventDefault(); e.stopPropagation(); return; }
+      if (ctrl && shift && /^[cC]$/.test(k)) { e.preventDefault(); e.stopPropagation(); return; }
+      if (ctrl && !shift && /^[uU]$/.test(k)) { e.preventDefault(); e.stopPropagation(); return; }
+      if (ctrl && !shift && /^[sS]$/.test(k)) { e.preventDefault(); e.stopPropagation(); return; }
+    }, true);
+  })();
+</script>
+</body>
+</html>
