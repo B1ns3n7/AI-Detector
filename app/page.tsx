@@ -8449,7 +8449,6 @@ function EngineCard({
 
       {/* Score block */}
       <div className="mx-4 mb-3 rounded-xl p-3.5 flex items-center gap-4" style={{ background: tier.bg, border: `1px solid ${tier.border}` }}>
-        <CircularGauge pct={bd.ai} color={tier.color} size={72} />
         <div className="flex-1 min-w-0">
           <p className="text-xs font-bold mb-0.5" style={{ color: tier.color }}>{tier.label}</p>
           <p className="text-[11px] text-slate-600 leading-snug line-clamp-2">{result.verdictPhrase}</p>
