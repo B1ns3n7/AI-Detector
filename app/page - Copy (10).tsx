@@ -3,496 +3,6 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  FEATURE ADDITIONS — 2026-04-29
-//  1. Dataset Evaluation Mode (CSV/JSON batch upload)
-//  2. ROC Curve + Confusion Matrix (requires ground-truth labels)
-//  3. Model Comparison Dashboard (Engine A vs B vs C across dataset)
-//  4. Experiment Tracking Panel (history of batch evaluations)
-//  5. SHAP-like Signal Contribution Viewer (feature attribution deltas)
-//  6. Real-time Monitoring Dashboard (in-session volume tracking + drift)
-// ═══════════════════════════════════════════════════════════════════════════════
-
-// ── Dataset & Evaluation Types ───────────────────────────────────────────────
-
-interface DatasetRow {
-  id: string;
-  text: string;
-  groundTruth?: "AI" | "Human"; // optional — enables ROC/confusion matrix
-  label?: string; // user-supplied label/name for the row
-}
-
-interface BatchResult {
-  row: DatasetRow;
-  perpScore: number;
-  burstScore: number;
-  // Neural is skipped in batch mode to avoid API rate limits — approximated
-  combinedAI: number;
-  verdict: string;
-  psStrength: string;
-  bcStrength: string;
-  processingMs: number;
-}
-
-interface ExperimentRun {
-  id: string;
-  ts: number;
-  name: string;
-  rowCount: number;
-  hasGroundTruth: boolean;
-  // Aggregate metrics
-  avgAI: number;
-  aiCount: number;
-  humanCount: number;
-  mixedCount: number;
-  // Accuracy metrics (only when groundTruth provided)
-  accuracy?: number;
-  precision?: number;
-  recall?: number;
-  f1?: number;
-  auc?: number;
-  // Raw results stored for comparison dashboard
-  results: BatchResult[];
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-//  FIREBASE MULTI-USER BACKEND
-//  Drop-in replacement for all localStorage calls.
-//  Setup: add your Firebase config to FIREBASE_CONFIG below, then enable
-//  Firestore and Anonymous Auth in your Firebase console.
-//
-//  Collections:
-//    users/{uid}/history          — scan history per user
-//    users/{uid}/experiments      — batch experiment runs per user
-//    users/{uid}/monitoring       — real-time monitoring events per user
-//    users/{uid}/calibration      — reviewer calibration data per user
-//    shared/monitoring/events     — global monitoring across all users (optional)
-// ═══════════════════════════════════════════════════════════════════════════════
-
-// ── STEP 1: Paste your Firebase config here ───────────────────────────────────
-// Get this from Firebase Console → Project Settings → Your Apps → SDK setup
-const FIREBASE_CONFIG = {
-  apiKey:            process.env.NEXT_PUBLIC_FIREBASE_API_KEY            ?? "",
-  authDomain:        process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN        ?? "",
-  projectId:         process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID         ?? "",
-  storageBucket:     process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET     ?? "",
-  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID ?? "",
-  appId:             process.env.NEXT_PUBLIC_FIREBASE_APP_ID             ?? "",
-};
-
-// ── Firebase SDK (loaded dynamically to avoid SSR issues) ────────────────────
-import type { Firestore } from "firebase/firestore";
-import type { Auth, User } from "firebase/auth";
-
-let _db: Firestore | null = null;
-let _auth: Auth | null = null;
-let _currentUser: User | null = null;
-let _firebaseReady = false;
-let _firebaseError = "";
-
-// Lazy-initialise Firebase once on the client
-async function initFirebase(): Promise<boolean> {
-  if (_firebaseReady) return true;
-  if (typeof window === "undefined") return false;
-  if (!FIREBASE_CONFIG.apiKey) {
-    _firebaseError = "Firebase config missing. Set NEXT_PUBLIC_FIREBASE_* env vars.";
-    console.warn(_firebaseError);
-    return false;
-  }
-  try {
-    const { initializeApp, getApps } = await import("firebase/app");
-    const { getFirestore } = await import("firebase/firestore");
-    const { getAuth, signInAnonymously, onAuthStateChanged } = await import("firebase/auth");
-
-    const app = getApps().length ? getApps()[0] : initializeApp(FIREBASE_CONFIG);
-    _db   = getFirestore(app);
-    _auth = getAuth(app);
-
-    await new Promise<void>((resolve) => {
-      onAuthStateChanged(_auth!, async (user) => {
-        if (user) {
-          _currentUser = user;
-        } else {
-          const cred = await signInAnonymously(_auth!);
-          _currentUser = cred.user;
-        }
-        resolve();
-      });
-    });
-
-    _firebaseReady = true;
-    return true;
-  } catch (e: any) {
-    _firebaseError = `Firebase init failed: ${e.message}`;
-    console.error(_firebaseError);
-    return false;
-  }
-}
-
-function uid(): string { return _currentUser?.uid ?? "anonymous"; }
-
-// ── Firestore helpers ─────────────────────────────────────────────────────────
-
-async function fsGet<T>(path: string): Promise<T | null> {
-  if (!await initFirebase() || !_db) return null;
-  try {
-    const { doc, getDoc } = await import("firebase/firestore");
-    const snap = await getDoc(doc(_db, path));
-    return snap.exists() ? (snap.data() as T) : null;
-  } catch (e) { console.error("fsGet", path, e); return null; }
-}
-
-async function fsSet(path: string, data: object): Promise<void> {
-  if (!await initFirebase() || !_db) return;
-  try {
-    const { doc, setDoc } = await import("firebase/firestore");
-    await setDoc(doc(_db, path), data);
-  } catch (e) { console.error("fsSet", path, e); }
-}
-
-async function fsAddToArray<T>(path: string, field: string, item: T, maxItems: number): Promise<void> {
-  if (!await initFirebase() || !_db) return;
-  try {
-    const { doc, getDoc, setDoc } = await import("firebase/firestore");
-    const ref = doc(_db, path);
-    const snap = await getDoc(ref);
-    const existing: T[] = snap.exists() ? (snap.data()[field] ?? []) : [];
-    const updated = [item, ...existing].slice(0, maxItems);
-    await setDoc(ref, { [field]: updated }, { merge: true });
-  } catch (e) { console.error("fsAddToArray", path, e); }
-}
-
-async function fsGetArray<T>(path: string, field: string): Promise<T[]> {
-  if (!await initFirebase() || !_db) return [];
-  try {
-    const { doc, getDoc } = await import("firebase/firestore");
-    const snap = await getDoc(doc(_db, path));
-    return snap.exists() ? (snap.data()[field] ?? []) : [];
-  } catch (e) { console.error("fsGetArray", path, e); return []; }
-}
-
-// ── Firebase-backed storage functions (replace localStorage) ──────────────────
-
-async function loadExperimentsAsync(): Promise<ExperimentRun[]> {
-  const ok = await initFirebase();
-  if (!ok) return loadExperimentsLocal();
-  return fsGetArray<ExperimentRun>(`users/${uid()}/experiments`, "runs");
-}
-
-async function saveExperimentsAsync(runs: ExperimentRun[]): Promise<void> {
-  const ok = await initFirebase();
-  if (!ok) { saveExperimentsLocal(runs); return; }
-  await fsSet(`users/${uid()}/experiments`, { runs: runs.slice(0, 20) });
-  saveExperimentsLocal(runs); // keep local copy as offline fallback
-}
-
-async function loadHistoryAsync(): Promise<ScanRecord[]> {
-  const ok = await initFirebase();
-  if (!ok) return loadHistoryLocal();
-  return fsGetArray<ScanRecord>(`users/${uid()}/history`, "records");
-}
-
-async function saveHistoryAsync(records: ScanRecord[]): Promise<void> {
-  const ok = await initFirebase();
-  if (!ok) { saveHistoryLocal(records); return; }
-  await fsSet(`users/${uid()}/history`, { records: records.slice(0, 50) });
-  saveHistoryLocal(records);
-}
-
-async function loadMonitoringEventsAsync(): Promise<MonitoringEvent[]> {
-  const ok = await initFirebase();
-  if (!ok) return loadMonitoringEventsLocal();
-  return fsGetArray<MonitoringEvent>(`users/${uid()}/monitoring`, "events");
-}
-
-async function saveMonitoringEventAsync(evt: MonitoringEvent): Promise<void> {
-  const ok = await initFirebase();
-  if (!ok) { saveMonitoringEventLocal(evt); return; }
-  await fsAddToArray<MonitoringEvent>(`users/${uid()}/monitoring`, "events", evt, 200);
-  saveMonitoringEventLocal(evt);
-
-  // Also write to shared global monitoring collection (cross-user Monitor dashboard)
-  await fsAddToArray<MonitoringEvent & { uid: string }>(
-    "shared/monitoring/global", "events",
-    { ...evt, uid: uid() }, 1000
-  );
-}
-
-async function loadCalibrationAsync(): Promise<CalibrationData> {
-  const ok = await initFirebase();
-  if (!ok) return loadCalibrationLocal();
-  const data = await fsGet<CalibrationData>(`users/${uid()}/calibration`);
-  return data ?? { totalScans: 0, reviewerOverrides: 0, systemSaidAI_reviewerSaidHuman: 0, systemSaidHuman_reviewerSaidAI: 0, bandOverrides: {} };
-}
-
-async function saveCalibrationAsync(data: CalibrationData): Promise<void> {
-  const ok = await initFirebase();
-  if (!ok) { saveCalibrationLocal(data); return; }
-  await fsSet(`users/${uid()}/calibration`, data as object);
-  saveCalibrationLocal(data);
-}
-
-// ── Local fallbacks (original localStorage implementations) ───────────────────
-
-function loadExperimentsLocal(): ExperimentRun[] {
-  try { return JSON.parse(localStorage.getItem("aidetect_experiments") || "[]"); }
-  catch { return []; }
-}
-function saveExperimentsLocal(runs: ExperimentRun[]) {
-  try { localStorage.setItem("aidetect_experiments", JSON.stringify(runs.slice(0, 20))); } catch {}
-}
-function loadMonitoringEventsLocal(): MonitoringEvent[] {
-  try { return JSON.parse(localStorage.getItem("aidetect_monitoring") || "[]"); }
-  catch { return []; }
-}
-function saveMonitoringEventLocal(evt: MonitoringEvent) {
-  try {
-    const events = loadMonitoringEventsLocal();
-    events.unshift(evt);
-    localStorage.setItem("aidetect_monitoring", JSON.stringify(events.slice(0, 200)));
-  } catch {}
-}
-
-// ── Auth state hook ───────────────────────────────────────────────────────────
-
-function useFirebaseAuth() {
-  const [user, setUser]       = useState<User | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError]     = useState("");
-
-  useEffect(() => {
-    initFirebase().then(ok => {
-      if (!ok) { setError(_firebaseError); setLoading(false); return; }
-      import("firebase/auth").then(({ onAuthStateChanged }) => {
-        const unsub = onAuthStateChanged(_auth!, u => {
-          setUser(u); _currentUser = u; setLoading(false);
-        });
-        return unsub;
-      });
-    });
-  }, []);
-
-  const signInWithGoogle = async () => {
-    try {
-      const { GoogleAuthProvider, signInWithPopup } = await import("firebase/auth");
-      await signInWithPopup(_auth!, new GoogleAuthProvider());
-    } catch (e: any) { setError(e.message); }
-  };
-
-  const signInAnon = async () => {
-    try {
-      const { signInAnonymously } = await import("firebase/auth");
-      await signInAnonymously(_auth!);
-    } catch (e: any) { setError(e.message); }
-  };
-
-  const signOut = async () => {
-    try {
-      const { signOut: fbSignOut } = await import("firebase/auth");
-      await fbSignOut(_auth!);
-    } catch (e: any) { setError(e.message); }
-  };
-
-  return { user, loading, error, signInWithGoogle, signInAnon, signOut };
-}
-
-// ── Auth UI component ─────────────────────────────────────────────────────────
-
-function AuthBar({ user, loading, error, onGoogle, onAnon, onSignOut }: {
-  user: User | null; loading: boolean; error: string;
-  onGoogle: () => void; onAnon: () => void; onSignOut: () => void;
-}) {
-  if (!FIREBASE_CONFIG.apiKey) return (
-    <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-amber-50 border border-amber-200">
-      <span className="text-[10px] text-amber-700 font-semibold">⚠ Firebase not configured — running in local mode</span>
-    </div>
-  );
-
-  if (loading) return (
-    <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-100">
-      <span className="text-[10px] text-slate-500">Connecting…</span>
-    </div>
-  );
-
-  if (error) return (
-    <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-red-50 border border-red-200">
-      <span className="text-[10px] text-red-600 font-semibold">Firebase error — local mode</span>
-    </div>
-  );
-
-  if (!user) return (
-    <div className="flex items-center gap-2">
-      <button onClick={onGoogle}
-        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white border border-slate-200 hover:bg-slate-50 text-xs font-semibold text-slate-700 transition-colors shadow-sm">
-        <svg className="w-3.5 h-3.5" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
-        Sign in with Google
-      </button>
-      <button onClick={onAnon}
-        className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-xs font-semibold text-slate-600 transition-colors">
-        Continue anonymously
-      </button>
-    </div>
-  );
-
-  return (
-    <div className="flex items-center gap-2">
-      <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-50 border border-emerald-200">
-        {user.photoURL && <img src={user.photoURL} className="w-4 h-4 rounded-full" alt="" />}
-        <span className="text-[10px] text-emerald-700 font-semibold">
-          {user.isAnonymous ? "Anonymous" : (user.displayName ?? user.email ?? "Signed in")}
-        </span>
-        <span className="text-[9px] text-emerald-500">· synced</span>
-      </div>
-      <button onClick={onSignOut}
-        className="text-[10px] text-slate-400 hover:text-slate-600 transition-colors">
-        Sign out
-      </button>
-    </div>
-  );
-}
-
-// ── Monitoring State ─────────────────────────────────────────────────────────
-
-interface MonitoringEvent {
-  ts: number;
-  aiPct: number;
-  verdict: string;
-  wordCount: number;
-}
-
-// ── SHAP-like Signal Attribution ─────────────────────────────────────────────
-
-interface ShapEntry {
-  signal: string;
-  baseScore: number;
-  withSignal: number;
-  delta: number; // positive = points to AI
-  engine: "PS" | "BC";
-}
-
-function computeShapValues(perpResult: EngineResult | null, burstResult: EngineResult | null): ShapEntry[] {
-  if (!perpResult && !burstResult) return [];
-  const entries: ShapEntry[] = [];
-  // For each engine, compute baseline (signals off) vs full score delta
-  // We approximate by using each signal's reported strength as its contribution
-  const processEngine = (result: EngineResult, engine: "PS" | "BC") => {
-    const base = result.internalScore;
-    const totalStrength = result.signals.reduce((s, sig) => s + (sig.pointsToAI ? sig.strength : -sig.strength * 0.3), 0);
-    for (const sig of result.signals) {
-      const contribution = totalStrength !== 0
-        ? (sig.pointsToAI ? sig.strength : -sig.strength * 0.3) / Math.max(Math.abs(totalStrength), 1) * base
-        : 0;
-      entries.push({
-        signal: sig.name,
-        baseScore: base - contribution,
-        withSignal: base,
-        delta: parseFloat(contribution.toFixed(1)),
-        engine,
-      });
-    }
-  };
-  if (perpResult) processEngine(perpResult, "PS");
-  if (burstResult) processEngine(burstResult, "BC");
-  return entries.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta)).slice(0, 20);
-}
-
-// ── CSV Parser ────────────────────────────────────────────────────────────────
-
-function parseCSV(text: string): DatasetRow[] {
-  const lines = text.trim().split(/\r?\n/);
-  if (lines.length < 2) return [];
-  const header = lines[0].split(",").map(h => h.trim().toLowerCase().replace(/"/g, ""));
-  const textCol = header.findIndex(h => ["text", "content", "body", "passage"].includes(h));
-  const labelCol = header.findIndex(h => ["label", "name", "title", "id"].includes(h));
-  const gtCol = header.findIndex(h => ["groundtruth", "ground_truth", "truth", "class", "category", "actual"].includes(h));
-  if (textCol === -1) return [];
-  const rows: DatasetRow[] = [];
-  for (let i = 1; i < lines.length; i++) {
-    // Simple CSV split (handles quoted commas)
-    const cols: string[] = [];
-    let cur = "", inQ = false;
-    for (const ch of lines[i]) {
-      if (ch === '"') { inQ = !inQ; }
-      else if (ch === ',' && !inQ) { cols.push(cur.trim()); cur = ""; }
-      else { cur += ch; }
-    }
-    cols.push(cur.trim());
-    const rawText = cols[textCol]?.replace(/^"|"$/g, "") ?? "";
-    if (rawText.length < 20) continue;
-    const gt = gtCol >= 0 ? cols[gtCol]?.replace(/^"|"$/g, "").toLowerCase() : undefined;
-    rows.push({
-      id: String(i),
-      text: rawText,
-      label: labelCol >= 0 ? cols[labelCol]?.replace(/^"|"$/g, "") : `Row ${i}`,
-      groundTruth: gt === "ai" || gt === "ai-generated" || gt === "1" ? "AI"
-        : gt === "human" || gt === "human-written" || gt === "0" ? "Human"
-        : undefined,
-    });
-  }
-  return rows;
-}
-
-function parseJSONDataset(text: string): DatasetRow[] {
-  try {
-    const data = JSON.parse(text);
-    const arr: any[] = Array.isArray(data) ? data : data.texts ?? data.rows ?? data.data ?? [];
-    return arr.map((item: any, i: number) => ({
-      id: String(item.id ?? i + 1),
-      text: String(item.text ?? item.content ?? item.body ?? item.passage ?? ""),
-      label: item.label ?? item.name ?? item.title ?? `Item ${i + 1}`,
-      groundTruth: (() => {
-        const gt = String(item.groundTruth ?? item.ground_truth ?? item.truth ?? item.class ?? "").toLowerCase();
-        return gt === "ai" || gt === "ai-generated" || gt === "1" ? "AI"
-          : gt === "human" || gt === "human-written" || gt === "0" ? "Human"
-          : undefined;
-      })(),
-    })).filter((r: DatasetRow) => r.text.length >= 20);
-  } catch { return []; }
-}
-
-// ── ROC + Metrics Calculator ──────────────────────────────────────────────────
-
-function computeROCPoints(results: BatchResult[]): Array<{ threshold: number; tpr: number; fpr: number }> {
-  const withGT = results.filter(r => r.row.groundTruth);
-  if (withGT.length === 0) return [];
-  const positives = withGT.filter(r => r.row.groundTruth === "AI").length;
-  const negatives = withGT.filter(r => r.row.groundTruth === "Human").length;
-  if (positives === 0 || negatives === 0) return [];
-  const thresholds = Array.from({ length: 21 }, (_, i) => i * 5); // 0,5,10,...100
-  return thresholds.map(t => {
-    const tp = withGT.filter(r => r.row.groundTruth === "AI" && r.combinedAI >= t).length;
-    const fp = withGT.filter(r => r.row.groundTruth === "Human" && r.combinedAI >= t).length;
-    return { threshold: t, tpr: tp / positives, fpr: fp / negatives };
-  });
-}
-
-function computeAUC(rocPoints: Array<{ tpr: number; fpr: number }>): number {
-  if (rocPoints.length < 2) return 0.5;
-  let auc = 0;
-  for (let i = 1; i < rocPoints.length; i++) {
-    const dx = rocPoints[i - 1].fpr - rocPoints[i].fpr;
-    const avgY = (rocPoints[i - 1].tpr + rocPoints[i].tpr) / 2;
-    auc += dx * avgY;
-  }
-  return Math.max(0, Math.min(1, auc));
-}
-
-function computeClassificationMetrics(results: BatchResult[], threshold = 50): {
-  accuracy: number; precision: number; recall: number; f1: number; tp: number; fp: number; tn: number; fn: number;
-} {
-  const withGT = results.filter(r => r.row.groundTruth);
-  if (withGT.length === 0) return { accuracy: 0, precision: 0, recall: 0, f1: 0, tp: 0, fp: 0, tn: 0, fn: 0 };
-  const tp = withGT.filter(r => r.row.groundTruth === "AI" && r.combinedAI >= threshold).length;
-  const fp = withGT.filter(r => r.row.groundTruth === "Human" && r.combinedAI >= threshold).length;
-  const tn = withGT.filter(r => r.row.groundTruth === "Human" && r.combinedAI < threshold).length;
-  const fn = withGT.filter(r => r.row.groundTruth === "AI" && r.combinedAI < threshold).length;
-  const accuracy = (tp + tn) / withGT.length;
-  const precision = tp + fp > 0 ? tp / (tp + fp) : 0;
-  const recall = tp + fn > 0 ? tp / (tp + fn) : 0;
-  const f1 = precision + recall > 0 ? 2 * precision * recall / (precision + recall) : 0;
-  return { accuracy, precision, recall, f1, tp, fp, tn, fn };
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
 //  OPTIMIZED BUILD — Applied 2026-04-29  (Round 2)
 //  Round 1 optimizations preserved — see original header above
 //
@@ -3680,189 +3190,6 @@ const BUSINESS_TERMS = new Set([
   "budget","overhead","capex","opex","procurement","vendor","supplier",
 ]);
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  THESIS CONCLUSION DETECTOR
-//  Identifies whether the submitted text is a thesis/research Chapter 5 or
-//  similar academic conclusion section. This genre is the highest-risk zone for
-//  AI assistance and the one most suppressed by existing calibrations.
-//
-//  Key insight: conclusion sections have ZERO ESL transfer features (they are
-//  polished final output), yet the current pipeline applies ESL and academic
-//  domain multipliers as if they were body paragraphs — massively under-scoring.
-//
-//  Returns: { isThesisConclusion, isSummaryChapter, confidenceScore 0-1 }
-// ─────────────────────────────────────────────────────────────────────────────
-
-interface ThesisGenreProfile {
-  isThesisConclusion: boolean;
-  isSummaryChapter: boolean;
-  confidenceScore: number; // 0-1
-  detectedMarkers: string[];
-}
-
-function detectThesisGenre(text: string, sentences: string[]): ThesisGenreProfile {
-  const lower = text.toLowerCase();
-  const detectedMarkers: string[] = [];
-
-  // ── Chapter 5 / Summary chapter structural markers ───────────────────────
-  const chapterHeadings = (text.match(
-    /\b(chapter\s+5|summary[,\s]+conclusions?[,\s]+and\s+recommendations?|summary\s+of\s+findings?|conclusions?\s+and\s+recommendations?|summary,\s*conclusions?\s*and|discussion\s+and\s+conclusions?)\b/gi
-  ) || []).length;
-  if (chapterHeadings > 0) detectedMarkers.push("chapter-heading");
-
-  // ── Finding-numbered structure (Finding 1:, Finding 2:, etc.) ────────────
-  const findingNumbers = (text.match(/\bfinding\s+\d+[:\.]/gi) || []).length;
-  if (findingNumbers >= 2) detectedMarkers.push("numbered-findings");
-
-  // ── Conclusion schema phrases — the exact phrases that dominate AI-written conclusions ──
-  const conclusionSchema = (text.match(
-    /\b(this study (successfully|aims?|was able to|found|revealed|demonstrated|showed|confirmed|achieved|contributes?|supports?|provides?|highlights?|indicates?)|the (results?|findings?|study|research|model|analysis) (revealed?|showed?|demonstrated?|indicated?|suggest(s|ed)?|confirms?|proves?|established|support(s|ed)?)|in summary|in conclusion|these results? (show|confirm|demonstrate|highlight|suggest|indicate)|the aforementioned|the foregoing|as (previously|earlier|above) (mentioned|discussed|stated|noted|described))\b/gi
-  ) || []).length;
-  if (conclusionSchema >= 3) detectedMarkers.push("conclusion-schema");
-
-  // ── Recommendations section ───────────────────────────────────────────────
-  const recommendationsSection = /\brecommendations?\b/i.test(text);
-  if (recommendationsSection) detectedMarkers.push("recommendations-section");
-
-  // ── Research objective language ───────────────────────────────────────────
-  const researchObjectives = (text.match(
-    /\b(research (objective|question|gap|problem)|objective of (this|the) study|aims? (to|of) (this|the)|this study (aimed?|sought|intend(s|ed)?|investigat)|the study('s)? (main|primary|key|central) (objective|aim|goal|purpose|contribution))\b/gi
-  ) || []).length;
-  if (researchObjectives >= 2) detectedMarkers.push("research-objectives");
-
-  // ── Baseline model comparison language (specific to empirical research conclusions) ─
-  const baselineComparison = (text.match(
-    /\b(baseline model|outperform(s|ed)?|compared (with|to)|RMSE|MAE|R[\u00B2²]|accuracy|precision|recall|F1|AUC|performance metric|ablation|hyperparameter|epoch(s)?|training (loss|set|data)|validation (loss|set|data))\b/gi
-  ) || []).length;
-  if (baselineComparison >= 3) detectedMarkers.push("empirical-research");
-
-  // ── Zero ESL transfer features — this is the CRITICAL inverse signal ─────
-  // Genuine thesis conclusions written by Philippine students show at least some
-  // L1 interference: article omission, preposition errors, awkward collocations.
-  // AI-polished conclusions are perfectly clean. Zero errors = higher suspicion.
-  const articleErrors = (text.match(/\b(a\s+[aeiou]\w+|an\s+[^aeiou\s]\w+)\b/gi) || []).length; // crude article mismatch detector
-  const droppedArticles = (text.match(/\b(study was conducted|research was done|model was designed|data was collected|analysis was performed)\b/gi) || []).length;
-  const hasL1Transfer = articleErrors > 2 || droppedArticles > 0 ||
-    /\b(the researchers|the proponents|the authors) (were able to|have)\b/i.test(text);
-  if (!hasL1Transfer && detectedMarkers.length >= 2) detectedMarkers.push("zero-L1-transfer");
-
-  // ── Nominalization density (the key structural tell for AI conclusion prose) ──
-  const nominalizations = (text.match(
-    /\b\w+(tion|sion|ment|ance|ence|ity|ness|ism|ization|isation|ify|ifying)\b/gi
-  ) || []).length;
-  const wordCount = (text.match(/\b\w+\b/g) || []).length;
-  const nominalizationRate = nominalizations / Math.max(wordCount, 1);
-  if (nominalizationRate > 0.12) detectedMarkers.push("high-nominalization");
-
-  // ── Rhetorical schema uniformity — every paragraph starts with "The [noun]" ──
-  const parasStartingWithThe = sentences.filter(s => /^\s*(the\s+\w+|this\s+\w+|these\s+\w+|it\s+(is|was)|in\s+(summary|conclusion|addition|contrast|terms))/i.test(s.trim())).length;
-  const schemaUniformity = parasStartingWithThe / Math.max(sentences.length, 1);
-  if (schemaUniformity > 0.50) detectedMarkers.push("schema-uniformity");
-
-  // ── Confidence scoring ────────────────────────────────────────────────────
-  const markerScore =
-    (detectedMarkers.includes("chapter-heading") ? 0.35 : 0) +
-    (detectedMarkers.includes("numbered-findings") ? 0.25 : 0) +
-    (detectedMarkers.includes("conclusion-schema") ? 0.15 : 0) +
-    (detectedMarkers.includes("recommendations-section") ? 0.10 : 0) +
-    (detectedMarkers.includes("empirical-research") ? 0.10 : 0) +
-    (detectedMarkers.includes("zero-L1-transfer") ? 0.10 : 0) +
-    (detectedMarkers.includes("high-nominalization") ? 0.05 : 0) +
-    (detectedMarkers.includes("schema-uniformity") ? 0.05 : 0);
-
-  const confidenceScore = Math.min(1.0, markerScore);
-  const isThesisConclusion = confidenceScore >= 0.35;
-  const isSummaryChapter = detectedMarkers.includes("chapter-heading") || detectedMarkers.includes("numbered-findings");
-
-  return { isThesisConclusion, isSummaryChapter, confidenceScore, detectedMarkers };
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  NOMINALIZATION DENSITY SIGNAL
-//  Measures the rate of abstract nouning (tion/sion/ment/ance/ity/ness endings).
-//  AI-generated academic prose is dense with nominalizations because LLMs
-//  default to the most formal register. Human thesis writers also use them but
-//  at lower rates, and they mix in concrete verb-driven clauses.
-//
-//  Critically: thesis CONCLUSION sections AI-polished show nominalization rates
-//  of 0.14–0.20, vs human conclusions at 0.08–0.12.
-//  Score: 0–18.
-// ─────────────────────────────────────────────────────────────────────────────
-
-function nominalizationDensityScore(text: string, wc: number): { score: number; rate: number; details: string } {
-  if (wc < 50) return { score: 0, rate: 0, details: "Text too short for nominalization analysis." };
-  const nomMatches = (text.match(/\b\w+(tion|sion|ment|ance|ence|ity|ness|ism|ization|isation)\b/gi) || []);
-  const nomCount = nomMatches.length;
-  const rate = nomCount / wc;
-
-  // Exclude common nominalizations that appear in all formal writing (not diagnostic)
-  const COMMON_NOMS = new Set(["information","communication","government","education","implementation",
-    "administration","organization","population","application","distribution","system","condition",
-    "situation","development","management","performance","environment","relationship","requirement",
-    "generation","reduction","introduction","section","question","action","position","function"]);
-  const diagnosticNoms = nomMatches.filter(w => !COMMON_NOMS.has(w.toLowerCase()));
-  const diagnosticRate = diagnosticNoms.length / wc;
-
-  let score = 0;
-  if (diagnosticRate > 0.09)      score = 18;
-  else if (diagnosticRate > 0.07) score = 14;
-  else if (diagnosticRate > 0.05) score = 9;
-  else if (diagnosticRate > 0.03) score = 4;
-
-  return {
-    score,
-    rate,
-    details: score > 0
-      ? `Nominalization rate: ${(rate * 100).toFixed(1)}% (diagnostic: ${(diagnosticRate * 100).toFixed(1)}%). AI-generated academic conclusions densely nominalize verbs into abstract nouns (e.g., "the implementation of", "the integration of", "the utilization of"). ${diagnosticNoms.slice(0, 5).join(", ")}…`
-      : `Nominalization rate ${(rate * 100).toFixed(1)}% within normal range.`,
-  };
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  CONCLUSION SCHEMA UNIFORMITY SIGNAL
-//  Detects whether the text follows the rigid paragraph schema that AI uses for
-//  conclusion/summary chapters: restate → quantify → interpret → generalize.
-//  Each paragraph in AI conclusions is structurally predictable from the last.
-//  Score: 0–20.
-// ─────────────────────────────────────────────────────────────────────────────
-
-function conclusionSchemaUniformityScore(text: string, sentences: string[]): { score: number; details: string } {
-  if (sentences.length < 6) return { score: 0, details: "Insufficient sentences for conclusion schema analysis." };
-
-  // Count opening-phrase types per sentence
-  const RESTATE_OPENERS = /^\s*(the\s+(study|research|model|results?|findings?|analysis|framework|approach|method|system|algorithm|dataset|tft|temporal|fusion)\b|this\s+(study|research|paper|work)\b)/i;
-  const QUANTIFY_OPENERS = /^\s*(with\s+(an?\s+)?(rmse|mae|r²|accuracy|score|value|rate|result)|achieving|obtained|returned|showed?|produced|yielded|recorded)\b/i;
-  const GENERALIZE_OPENERS = /^\s*(in\s+(summary|conclusion|terms?)\b|overall\b|these?\s+(results?|findings?)\b|this\s+(demonstrates?|confirms?|shows?|suggests?|indicates?|supports?|validates?)\b|the\s+(use|integration|inclusion|application|combination|incorporation|adoption)\s+of\b)/i;
-  const RECOMMEND_OPENERS = /^\s*(future\s+(studies?|research|work)\b|it\s+is\s+recommended?\b|the\s+study\s+recommends?\b|researchers?\s+should\b)/i;
-
-  let restateCount = 0, quantifyCount = 0, generalizeCount = 0, recommendCount = 0;
-  for (const s of sentences) {
-    if (RESTATE_OPENERS.test(s)) restateCount++;
-    if (QUANTIFY_OPENERS.test(s)) quantifyCount++;
-    if (GENERALIZE_OPENERS.test(s)) generalizeCount++;
-    if (RECOMMEND_OPENERS.test(s)) recommendCount++;
-  }
-
-  const totalSchematic = restateCount + quantifyCount + generalizeCount + recommendCount;
-  const schemaRate = totalSchematic / sentences.length;
-
-  // High schema rate with all four move types = strong AI conclusion signal
-  const allMovesPresent = restateCount > 0 && quantifyCount > 0 && generalizeCount > 0;
-  let score = 0;
-  if (schemaRate > 0.55 && allMovesPresent) score = 20;
-  else if (schemaRate > 0.45 && allMovesPresent) score = 15;
-  else if (schemaRate > 0.40) score = 10;
-  else if (schemaRate > 0.30) score = 5;
-
-  return {
-    score,
-    details: score > 0
-      ? `Conclusion schema uniformity: ${(schemaRate * 100).toFixed(0)}% of sentences follow rigid rhetorical moves (restate: ${restateCount}, quantify: ${quantifyCount}, generalize: ${generalizeCount}, recommend: ${recommendCount}). AI conclusions mechanically cycle through these moves; human conclusions drift, digress, and vary structure.`
-      : `Paragraph opening variety is within normal range for this genre.`,
-  };
-}
-
-
 function detectDomain(text: string, words: string[]): DomainProfile {
   const wc = Math.max(words.length, 1);
   const lower = text.toLowerCase();
@@ -4549,7 +3876,7 @@ function stripCodeAndTableBlocks(text: string): string {
 //  genre-specific signal weighting in engines.
 // ─────────────────────────────────────────────────────────────────────────────
 
-type GenreType = "technical" | "academic_essay" | "narrative" | "reflective" | "lab_report" | "thesis_conclusion" | "general";
+type GenreType = "technical" | "academic_essay" | "narrative" | "reflective" | "lab_report" | "general";
 
 interface GenreProfile {
   genre: GenreType;
@@ -4583,25 +3910,13 @@ function classifyGenre(text: string, words: string[]): GenreProfile {
   const labRate = labMarkers / wc * 100;
 
   const scores: Array<[GenreType, number]> = [
-    ["technical",          techRate * 2],
-    ["academic_essay",     essayRate * 3],
-    ["narrative",          narrativeRate * 2.5],
-    ["reflective",         reflectiveRate * 2],
-    ["lab_report",         labRate * 3],
-    ["general",            1.0],
+    ["technical",       techRate * 2],
+    ["academic_essay",  essayRate * 3],
+    ["narrative",       narrativeRate * 2.5],
+    ["reflective",      reflectiveRate * 2],
+    ["lab_report",      labRate * 3],
+    ["general",         1.0],
   ];
-
-  // ── Thesis conclusion override — checked BEFORE sort ─────────────────────
-  // detectThesisGenre is the dedicated detector; if it fires at high confidence,
-  // override the genre classification regardless of other signals.
-  const thesisProfile = detectThesisGenre(text, text.match(/[^.!?]+[.!?]+/g) || []);
-  if (thesisProfile.isThesisConclusion) {
-    return {
-      genre: "thesis_conclusion",
-      confidence: thesisProfile.confidenceScore,
-      description: `Thesis/research conclusion chapter (${thesisProfile.detectedMarkers.join(", ")})`,
-    };
-  }
 
   scores.sort((a, b) => b[1] - a[1]);
   const topGenre = scores[0][0];
@@ -4614,7 +3929,6 @@ function classifyGenre(text: string, words: string[]): GenreProfile {
     narrative: "Narrative / creative writing",
     reflective: "Reflective journal / personal essay",
     lab_report: "Laboratory or research report",
-    thesis_conclusion: "Thesis/research conclusion chapter",
     general: "General prose",
   };
 
@@ -5080,28 +4394,11 @@ function runPerplexityEngine(text: string): EngineResult {
   const genreProfile = classifyGenre(text, words);
   // Genre-adaptive weight adjustments: technical texts have less reliable stylometric signals
   const genreMultiplier = genreProfile.genre === "technical" ? 0.80
-    : genreProfile.genre === "lab_report"        ? 0.85
-    : genreProfile.genre === "reflective"        ? 0.90
-    : genreProfile.genre === "thesis_conclusion" ? 1.15  // amplify: thesis conclusions are high-risk for AI; suppress override
+    : genreProfile.genre === "lab_report"   ? 0.85
+    : genreProfile.genre === "reflective"   ? 0.90
     : 1.0;
 
-  // ── NEW Signal 47: Nominalization Density (Thesis Conclusion) ─────────────
-  // AI-polished thesis conclusions have nominalization rates of 0.14–0.20 vs
-  // human conclusions at 0.08–0.12. Amplified when thesis_conclusion genre fires.
-  const { score: nomDensityScore, rate: nomDensityRate, details: nomDensityDetails } = nominalizationDensityScore(text, wc);
-  const nomDensityFinal = genreProfile.genre === "thesis_conclusion"
-    ? Math.min(18, Math.round(nomDensityScore * 1.4))
-    : nomDensityScore;
-
-  // ── NEW Signal 48: Conclusion Schema Uniformity ────────────────────────────
-  // Detects the rigid restate→quantify→interpret→generalize paragraph schema
-  // that AI uses for conclusion/summary chapters. Human conclusions drift.
-  const { score: schemaUniformityScore, details: schemaUniformityDetails } = conclusionSchemaUniformityScore(text, sentences);
-  const schemaUniformityFinal = genreProfile.genre === "thesis_conclusion"
-    ? Math.min(20, Math.round(schemaUniformityScore * 1.3))
-    : schemaUniformityScore;
-
-  const activeSignals = [vocabScore, transScore, bigramScore, ttrScore, nomScore, rhythmScore, structureScore, ethicsScore, tricolonScore, llamaScore, claudeCatchScore, paraOpenerScore, conclusionScore, syntaxScore, hedgeScore, clauseStackScore, windowTTRScore, mtldScoreVal, semanticSimScore, toneFlatnessScoreVal, vagueCtScore, discourseSchemaScoreVal, ideaRepScore, openerDiversityScore, punctEntropyScore, paraLenUniformityScore, coherenceScore, hapaxScore, readabilityScore, funcWordScore, capAbuseScore, familyFingerprintScore, selfBleuScoreVal, semanticDensityScoreVal, paraphraseScore, zipfScore, ttrTrajectoryScore, ksNormalityScoreVal, anaphoraScoreVal, argStructureScore, sectionDiffScore, nomDensityFinal, schemaUniformityFinal]
+  const activeSignals = [vocabScore, transScore, bigramScore, ttrScore, nomScore, rhythmScore, structureScore, ethicsScore, tricolonScore, llamaScore, claudeCatchScore, paraOpenerScore, conclusionScore, syntaxScore, hedgeScore, clauseStackScore, windowTTRScore, mtldScoreVal, semanticSimScore, toneFlatnessScoreVal, vagueCtScore, discourseSchemaScoreVal, ideaRepScore, openerDiversityScore, punctEntropyScore, paraLenUniformityScore, coherenceScore, hapaxScore, readabilityScore, funcWordScore, capAbuseScore, familyFingerprintScore, selfBleuScoreVal, semanticDensityScoreVal, paraphraseScore, zipfScore, ttrTrajectoryScore, ksNormalityScoreVal, anaphoraScoreVal, argStructureScore, sectionDiffScore]
     .filter(s => s > 5).length;
 
   // ── Improvement #8: Empirically-calibrated signal weights ────────────────
@@ -5164,9 +4461,7 @@ function runPerplexityEngine(text: string): EngineResult {
     ksNormalityScoreVal  * W_TIER_H +
     anaphoraScoreVal     * W_TIER_H +
     argStructureScore    * W_TIER_H +
-    sectionDiffScore     * W_TIER_H +
-    nomDensityFinal      * W_TIER_B +  // Tier B: structurally reliable, genre-amplified
-    schemaUniformityFinal * W_TIER_B;  // Tier B: conclusion schema — strong structural signal
+    sectionDiffScore     * W_TIER_H;
 
   const weightedMaxTotal =
     35  * W_TIER_A + 35  * W_TIER_A + 30  * W_TIER_A +
@@ -5178,8 +4473,7 @@ function runPerplexityEngine(text: string): EngineResult {
     20  * W_TIER_F + 16  * W_TIER_F + 18 * W_TIER_F + 16 * W_TIER_F +
     20  * W_TIER_G + 22  * W_TIER_G + 18 * W_TIER_G + 15 * W_TIER_G +
     20  * W_TIER_G + 20  * W_TIER_G + 16 * W_TIER_G + 18 * W_TIER_G +
-    22  * W_TIER_H + 20  * W_TIER_H + 18 * W_TIER_H + 16 * W_TIER_H + 18 * W_TIER_H + 20 * W_TIER_H +
-    18  * W_TIER_B + 20  * W_TIER_B;  // signals 47 + 48
+    22  * W_TIER_H + 20  * W_TIER_H + 18 * W_TIER_H + 16 * W_TIER_H + 18 * W_TIER_H + 20 * W_TIER_H;
 
   const rawTotal = weightedRawTotal; // kept for backward compat with cluster boosts
   const maxTotal = weightedMaxTotal;
@@ -5263,23 +4557,9 @@ function runPerplexityEngine(text: string): EngineResult {
   // Research basis: false-positive rate on TOEFL essays dropped from 61.3% → 11.6%
   // after adjusting for non-native writing patterns. This is a DIRECT score reduction
   // (not just a warning) — the previous behavior only warned without adjusting.
-  //
-  // THESIS CONCLUSION BYPASS: When the text is identified as a thesis conclusion
-  // chapter with zero L1-transfer features, the ESL penalty is suppressed entirely.
-  // Rationale: AI-polished thesis conclusions have ZERO ESL features because they
-  // were written/edited by an LLM. Applying the Philippine ESL penalty here causes
-  // the exact false-negative that was observed (47% Turnitin vs 1% MultiLens gap).
-  // The absence of L1 interference in a Philippine student's conclusion is itself
-  // a suspicious signal, not a reason to reduce the score.
-  const thesisGenreForESL = detectThesisGenre(text, sentences);
-  const eslBypassActive = thesisGenreForESL.isThesisConclusion &&
-    thesisGenreForESL.detectedMarkers.includes("zero-L1-transfer");
-  const eslScorePenalty = eslBypassActive ? 0 : computeESLScorePenalty(reliabilityWarnings, Math.round(norm));
+  const eslScorePenalty = computeESLScorePenalty(reliabilityWarnings, Math.round(norm));
   if (eslScorePenalty > 0) {
     norm = Math.max(0, norm - eslScorePenalty);
-  }
-  if (eslBypassActive) {
-    reliabilityWarnings.push("Thesis conclusion genre detected with zero L1-transfer features — ESL calibration suppressed. AI-polished conclusions show no ESL markers precisely because they were written/edited by an LLM. Score not reduced for Philippine academic context in this genre.");
   }
 
   // ── Improvement #9: Genre-adaptive adjustment ────────────────────────────
@@ -5660,22 +4940,6 @@ function runPerplexityEngine(text: string): EngineResult {
       pointsToAI: sectionDiffScore >= 8,
       wellSupported: sectionDiffScore >= 14,
     },
-    // ── NEW Signal 47: Nominalization Density ─────────────────────────────────
-    {
-      name: "Nominalization Density" + (genreProfile.genre === "thesis_conclusion" ? " [Thesis Conclusion — amplified]" : ""),
-      value: nomDensityDetails,
-      strength: Math.min(100, Math.round((nomDensityFinal / 18) * 100)),
-      pointsToAI: nomDensityFinal >= 9,
-      wellSupported: nomDensityFinal >= 14,
-    },
-    // ── NEW Signal 48: Conclusion Schema Uniformity ────────────────────────────
-    {
-      name: "Conclusion Schema Uniformity" + (genreProfile.genre === "thesis_conclusion" ? " [Thesis Conclusion — amplified]" : ""),
-      value: schemaUniformityDetails,
-      strength: Math.min(100, Math.round((schemaUniformityFinal / 20) * 100)),
-      pointsToAI: schemaUniformityFinal >= 10,
-      wellSupported: schemaUniformityFinal >= 15,
-    },
     // ── NEW Batch 2: Long-Document Chunk Analysis ─────────────────────────────
     ...(chunkAnalysis.isLongDoc ? [{
       name: `Long-Document Chunk Analysis (${chunkAnalysis.chunks.length} chunks)`,
@@ -5939,19 +5203,10 @@ function runBurstinessEngine(text: string): EngineResult {
     norm = Math.min(100, Math.max(0, norm * dampedMultiplier));
   }
 
-  // ── Thesis conclusion: amplify Engine B if thesis genre detected ───────────
-  const thesisGenreB = detectThesisGenre(text, sentences);
-  if (thesisGenreB.isThesisConclusion) {
-    norm = Math.min(100, norm * 1.12);
-  }
-
   // ── ESL / Philippine context score calibration ────────────────────────────
   // Apply the same ESL penalty as Engine A (but burstiness is already partially
   // suppressed above via eslFlagB; this handles any residual formal-register signal).
-  // BYPASS: same thesis-conclusion + zero-L1-transfer logic as Engine A.
-  const eslBypassB = thesisGenreB.isThesisConclusion &&
-    thesisGenreB.detectedMarkers.includes("zero-L1-transfer");
-  const eslScorePenaltyB = eslBypassB ? 0 : computeESLScorePenalty(reliabilityWarnings, Math.round(norm));
+  const eslScorePenaltyB = computeESLScorePenalty(reliabilityWarnings, Math.round(norm));
   if (eslScorePenaltyB > 0) {
     norm = Math.max(0, norm - eslScorePenaltyB * 0.6); // softer for Engine B — burstiness partly ESL-immune
   }
@@ -7305,11 +6560,7 @@ Evaluate these dimensions and return a score from 0 (strongly human) to 100 (str
 
 10. perturbation_resistance: Mentally test: if I changed 3 random words to synonyms, would the text degrade? AI text is at a LOCAL MAXIMUM — substitutions make it worse. Human text is NOT at a maximum — substitutions are neutral or improve nothing. A text that reads like "every word is exactly right" scores high here.
 
-ESL / Non-native English consideration: If writing shows ESL markers (shorter average sentences, direct noun-verb-object constructions, limited subordinate clause variety, simpler transition phrases, direct phrasing without elaboration, article omission errors, preposition confusions), REDUCE your overall_score by 10-15 points and note this in reliability_notes. False positives on ESL writers cause severe harm.
-
-CRITICAL EXCEPTION — THESIS CONCLUSION / CHAPTER 5: If the text appears to be a thesis conclusion, summary of findings, or Chapter 5 (look for: numbered findings, "this study successfully", "the results revealed", "recommendations" section, numbered conclusions, baseline model comparison, RMSE/MAE metrics, research objective language), you must NOT apply the ESL reduction even if the author is a Filipino/Philippine student. Here is why: AI-polished thesis conclusions show ZERO ESL transfer features precisely because an LLM wrote or heavily edited them. The absence of L1-interference is itself evidence of AI authorship. Instead, for thesis conclusion text, INCREASE sensitivity to: (1) token predictability — every word feels like the most statistically probable continuation; (2) structural uniformity — each paragraph follows an identical restate→quantify→interpret→generalize schema; (3) nominalization density — abstract nouns ending in -tion, -sion, -ment, -ity dominate; (4) zero hedging failures — no self-corrections, no contradictions, no writer's voice; (5) perfect schema adherence — conclusions that read like an LLM was given "write a conclusion for Finding N" as a prompt.
-
-For thesis conclusion text specifically, weight token_predictability at 50% of your overall_score (instead of the usual 20%). A score of 40-60 from Engines A and B for this genre should be treated as STRONGER evidence of AI than it would be for general prose, because the domain and ESL suppressions that reduced those scores do not apply here.
+ESL / Non-native English consideration: If writing shows ESL markers (shorter average sentences, direct noun-verb-object constructions, limited subordinate clause variety, simpler transition phrases, direct phrasing without elaboration), REDUCE your overall_score by 10-15 points and note this in reliability_notes. False positives on ESL writers cause severe harm.
 
 IMPORTANT: The bimodal_sentence_distribution and perturbation_resistance dimensions are NEW — use them to catch paraphrased AI text that evades vocabulary-based detectors.
 
@@ -8053,7 +7304,7 @@ function FingerprintExplanation({ dims }: { dims: Array<{ label: string; score: 
 //  5-tier verdict scale, mobile-first layout, accessibility, share/export
 // ─────────────────────────────────────────────────────────────────────────────
 
-// ── Scan History (Firebase + localStorage fallback) ──────────────────────────
+// ── Scan History (localStorage) ─────────────────────────────────────────────
 
 interface ScanRecord {
   id: string;
@@ -8066,31 +7317,34 @@ interface ScanRecord {
   reviewerVerdict?: string; // Enhancement #1: store reviewer override
 }
 
-function loadHistoryLocal(): ScanRecord[] {
+function loadHistory(): ScanRecord[] {
   try { return JSON.parse(localStorage.getItem("aidetect_history") || "[]"); }
   catch { return []; }
 }
 
-function saveHistoryLocal(records: ScanRecord[]) {
+function saveHistory(records: ScanRecord[]) {
   try { localStorage.setItem("aidetect_history", JSON.stringify(records.slice(0, 50))); }
   catch { /* quota exceeded — ignore */ }
 }
 
 // Enhancement #1: Reviewer feedback calibration
+// Stores reviewer overrides and computes a local false-positive rate.
+// Bayesian update: if override rate for a score band exceeds 30%, shift threshold by 5 pts.
 interface CalibrationData {
   totalScans: number;
   reviewerOverrides: number;
   systemSaidAI_reviewerSaidHuman: number;
   systemSaidHuman_reviewerSaidAI: number;
+  // Bayesian band tracking: score buckets 0-9,10-19,...,90-99 → [systemAI_count, overrideToHuman_count]
   bandOverrides?: Record<string, [number, number]>;
 }
 
-function loadCalibrationLocal(): CalibrationData {
+function loadCalibration(): CalibrationData {
   try { return JSON.parse(localStorage.getItem("aidetect_calibration") || "null") ?? { totalScans: 0, reviewerOverrides: 0, systemSaidAI_reviewerSaidHuman: 0, systemSaidHuman_reviewerSaidAI: 0, bandOverrides: {} }; }
   catch { return { totalScans: 0, reviewerOverrides: 0, systemSaidAI_reviewerSaidHuman: 0, systemSaidHuman_reviewerSaidAI: 0, bandOverrides: {} }; }
 }
 
-function saveCalibrationLocal(data: CalibrationData) {
+function saveCalibration(data: CalibrationData) {
   try { localStorage.setItem("aidetect_calibration", JSON.stringify(data)); } catch {}
 }
 
@@ -8108,7 +7362,7 @@ function getBayesianThresholdShift(score: number, cal: CalibrationData): number 
 }
 
 function recordReviewerFeedback(systemVerdict: string, reviewerVerdict: string, systemScore?: number) {
-  const cal = loadCalibrationLocal();
+  const cal = loadCalibration();
   cal.totalScans++;
   if (!cal.bandOverrides) cal.bandOverrides = {};
   const sysIsAI = systemVerdict.includes("AI") || systemVerdict.includes("Likely AI") || systemVerdict.includes("Almost Certainly");
@@ -8132,7 +7386,7 @@ function recordReviewerFeedback(systemVerdict: string, reviewerVerdict: string, 
     cal.bandOverrides[band][0]++;
   }
   if (sysIsHuman && revIsAI) cal.systemSaidHuman_reviewerSaidAI++;
-  saveCalibrationLocal(cal);
+  saveCalibration(cal);
 }
 
 // ── Breakdown helper (kept in sync with PDF layer) ──────────────────────────
@@ -8495,7 +7749,7 @@ function HistoryPanel({ history, onSelect, onClear }: {
   onSelect: (id: string) => void;
   onClear: () => void;
 }) {
-  const calibration = loadCalibrationLocal();
+  const calibration = loadCalibration();
 
   if (history.length === 0) return (
     <div className="text-center py-10 px-6">
@@ -8681,752 +7935,6 @@ function QualityGate({ wc }: { wc: number }) {
   );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-//  FEATURE 1: DATASET EVALUATION MODE
-// ═══════════════════════════════════════════════════════════════════════════════
-
-function DatasetEvaluationPanel({
-  onRunComplete,
-}: { onRunComplete: (run: ExperimentRun) => void }) {
-  const [rows, setRows] = useState<DatasetRow[]>([]);
-  const [runName, setRunName] = useState("");
-  const [running, setRunning] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [results, setResults] = useState<BatchResult[] | null>(null);
-  const [error, setError] = useState("");
-  const [dragOver, setDragOver] = useState(false);
-  const fileRef = useRef<HTMLInputElement>(null);
-  const [activeMetricTab, setActiveMetricTab] = useState<"table" | "roc" | "confusion" | "compare">("table");
-  const [rocThreshold, setRocThreshold] = useState(50);
-
-  const handleFile = async (file: File) => {
-    setError(""); setRows([]); setResults(null);
-    const text = await file.text();
-    const parsed = file.name.endsWith(".json") ? parseJSONDataset(text) : parseCSV(text);
-    if (parsed.length === 0) {
-      setError("No valid rows found. CSV must have a 'text' column. JSON must be an array with a 'text' field.");
-      return;
-    }
-    setRows(parsed);
-    setRunName(file.name.replace(/\.[^.]+$/, ""));
-  };
-
-  const runBatch = async () => {
-    if (rows.length === 0) return;
-    setRunning(true); setProgress(0); setResults(null);
-    const batchResults: BatchResult[] = [];
-    for (let i = 0; i < rows.length; i++) {
-      const row = rows[i];
-      const t0 = Date.now();
-      const sanitised = sanitiseInput(row.text.trim());
-      const p = runPerplexityEngine(sanitised);
-      const b = runBurstinessEngine(sanitised);
-      const elevRatio = (r: EngineResult) =>
-        r.sentences.length > 0 ? r.sentences.filter(s => s.label === "elevated").length / r.sentences.length : 0;
-      const pBd = uiDeriveBreakdown(p.internalScore, elevRatio(p));
-      const bBd = uiDeriveBreakdown(b.internalScore, elevRatio(b));
-      const combinedAI = Math.round((pBd.ai + bBd.ai) / 2);
-      const tier = getTier(combinedAI);
-      batchResults.push({
-        row, perpScore: p.internalScore, burstScore: b.internalScore,
-        combinedAI, verdict: tier.label, psStrength: p.evidenceStrength,
-        bcStrength: b.evidenceStrength, processingMs: Date.now() - t0,
-      });
-      setProgress(Math.round(((i + 1) / rows.length) * 100));
-      // Yield to UI every 5 rows
-      if (i % 5 === 4) await new Promise(r => setTimeout(r, 0));
-    }
-    setResults(batchResults);
-    setRunning(false);
-
-    // Build experiment run
-    const withGT = batchResults.filter(r => r.row.groundTruth);
-    const roc = computeROCPoints(batchResults);
-    const auc = computeAUC(roc);
-    const metrics = computeClassificationMetrics(batchResults, rocThreshold);
-    const run: ExperimentRun = {
-      id: Date.now().toString(),
-      ts: Date.now(),
-      name: runName || `Run ${new Date().toLocaleTimeString()}`,
-      rowCount: batchResults.length,
-      hasGroundTruth: withGT.length > 0,
-      avgAI: Math.round(batchResults.reduce((s, r) => s + r.combinedAI, 0) / batchResults.length),
-      aiCount: batchResults.filter(r => r.verdict.toLowerCase().includes("ai")).length,
-      humanCount: batchResults.filter(r => r.verdict.toLowerCase().includes("human") && !r.verdict.toLowerCase().includes("review")).length,
-      mixedCount: batchResults.filter(r => r.verdict.toLowerCase().includes("mixed") || r.verdict.toLowerCase().includes("review")).length,
-      accuracy: withGT.length > 0 ? metrics.accuracy : undefined,
-      precision: withGT.length > 0 ? metrics.precision : undefined,
-      recall: withGT.length > 0 ? metrics.recall : undefined,
-      f1: withGT.length > 0 ? metrics.f1 : undefined,
-      auc: roc.length > 0 ? auc : undefined,
-      results: batchResults,
-    };
-    onRunComplete(run);
-  };
-
-  const rocPoints = results ? computeROCPoints(results) : [];
-  const metrics = results ? computeClassificationMetrics(results, rocThreshold) : null;
-  const hasGT = rows.some(r => r.groundTruth);
-
-  return (
-    <div className="space-y-5">
-      {/* Upload */}
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
-        <p className="text-sm font-bold text-slate-800 mb-1">Dataset Evaluation</p>
-        <p className="text-xs text-slate-500 mb-4">Upload a CSV or JSON file with multiple texts. Optionally include a <code className="bg-slate-100 px-1 rounded">groundTruth</code> column (AI/Human) to unlock ROC curves, confusion matrix, and accuracy metrics.</p>
-
-        <div className="flex gap-3 mb-4">
-          <input value={runName} onChange={e => setRunName(e.target.value)}
-            placeholder="Run name (optional)"
-            className="flex-1 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500" />
-        </div>
-
-        <div
-          onDragOver={e => { e.preventDefault(); setDragOver(true); }}
-          onDragLeave={() => setDragOver(false)}
-          onDrop={e => { e.preventDefault(); setDragOver(false); const f = e.dataTransfer.files?.[0]; if (f) handleFile(f); }}
-          onClick={() => fileRef.current?.click()}
-          className={`flex flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed px-6 py-8 cursor-pointer transition-all ${dragOver ? "border-blue-400 bg-blue-50" : rows.length > 0 ? "border-emerald-300 bg-emerald-50" : "border-slate-200 bg-slate-50 hover:border-blue-300"}`}>
-          <input ref={fileRef} type="file" accept=".csv,.json" className="hidden"
-            onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f); }} />
-          {rows.length > 0 ? (
-            <div className="text-center">
-              <p className="text-sm font-bold text-emerald-700">✓ {rows.length} rows loaded</p>
-              <p className="text-xs text-emerald-600 mt-0.5">{hasGT ? `${rows.filter(r => r.groundTruth === "AI").length} AI / ${rows.filter(r => r.groundTruth === "Human").length} Human labels` : "No ground-truth labels — accuracy metrics unavailable"}</p>
-            </div>
-          ) : (
-            <div className="text-center">
-              <div className="text-3xl mb-2 opacity-30">📊</div>
-              <p className="text-sm font-semibold text-slate-600">Drop CSV or JSON file here</p>
-              <p className="text-xs text-slate-400 mt-0.5">Required column: <code>text</code> &nbsp;·&nbsp; Optional: <code>groundTruth</code>, <code>label</code></p>
-            </div>
-          )}
-        </div>
-
-        {error && <p className="text-xs text-red-600 mt-2">{error}</p>}
-
-        {rows.length > 0 && (
-          <button onClick={runBatch} disabled={running}
-            className="mt-4 w-full flex items-center justify-center gap-2 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-200 disabled:text-slate-400 text-white text-sm font-bold rounded-xl transition-colors">
-            {running ? (
-              <><svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/></svg>Running… {progress}%</>
-            ) : `Run Analysis on ${rows.length} texts`}
-          </button>
-        )}
-
-        {running && (
-          <div className="mt-3 h-2 bg-slate-100 rounded-full overflow-hidden">
-            <div className="h-full bg-blue-500 rounded-full transition-all duration-200" style={{ width: `${progress}%` }} />
-          </div>
-        )}
-      </div>
-
-      {/* Results */}
-      {results && (
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-          {/* Tabs */}
-          <div className="flex border-b border-slate-100 px-4 pt-3 gap-1">
-            {([
-              { id: "table", label: "Results Table" },
-              { id: "compare", label: "Engine Comparison" },
-              ...(rocPoints.length > 0 ? [{ id: "roc", label: "ROC Curve" }, { id: "confusion", label: "Confusion Matrix" }] : []),
-            ] as const).map(t => (
-              <button key={t.id} onClick={() => setActiveMetricTab(t.id as any)}
-                className={`px-3.5 py-2 text-xs font-semibold rounded-t-lg border-b-2 transition-all ${activeMetricTab === t.id ? "border-blue-600 text-blue-700 bg-blue-50/60" : "border-transparent text-slate-500 hover:text-slate-700"}`}>
-                {t.label}
-              </button>
-            ))}
-          </div>
-
-          <div className="p-5">
-            {/* Aggregate Summary */}
-            <div className="grid grid-cols-4 gap-3 mb-5">
-              {[
-                { label: "Texts Analyzed", val: results.length, color: "#1b3a6b" },
-                { label: "AI-Flagged", val: results.filter(r => r.verdict.toLowerCase().includes("ai")).length, color: "#dc2626" },
-                { label: "Human", val: results.filter(r => r.verdict.toLowerCase().includes("human") && !r.verdict.toLowerCase().includes("review")).length, color: "#16a34a" },
-                { label: "Avg AI Score", val: `${Math.round(results.reduce((s, r) => s + r.combinedAI, 0) / results.length)}%`, color: "#7c3aed" },
-              ].map(({ label, val, color }) => (
-                <div key={label} className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-center">
-                  <p className="text-xl font-black" style={{ color }}>{val}</p>
-                  <p className="text-[10px] font-semibold text-slate-500 mt-0.5">{label}</p>
-                </div>
-              ))}
-            </div>
-
-            {/* Accuracy Metrics */}
-            {metrics && hasGT && (
-              <div className="rounded-xl bg-indigo-50 border border-indigo-200 p-4 mb-5">
-                <p className="text-xs font-bold text-indigo-800 mb-3">Classification Metrics (threshold: {rocThreshold}%)</p>
-                <div className="grid grid-cols-4 gap-3 mb-3">
-                  {[
-                    { label: "Accuracy", val: `${(metrics.accuracy * 100).toFixed(1)}%` },
-                    { label: "Precision", val: `${(metrics.precision * 100).toFixed(1)}%` },
-                    { label: "Recall (TPR)", val: `${(metrics.recall * 100).toFixed(1)}%` },
-                    { label: "F1 Score", val: metrics.f1.toFixed(3) },
-                  ].map(({ label, val }) => (
-                    <div key={label} className="rounded-lg bg-white border border-indigo-100 p-2 text-center">
-                      <p className="text-base font-black text-indigo-700">{val}</p>
-                      <p className="text-[9px] text-indigo-500 font-semibold">{label}</p>
-                    </div>
-                  ))}
-                </div>
-                <div className="flex items-center gap-3">
-                  <label className="text-[10px] text-indigo-700 font-semibold whitespace-nowrap">Threshold: {rocThreshold}%</label>
-                  <input type="range" min={0} max={100} step={5} value={rocThreshold} onChange={e => setRocThreshold(Number(e.target.value))}
-                    className="flex-1 accent-indigo-600" />
-                </div>
-              </div>
-            )}
-
-            {/* Table View */}
-            {activeMetricTab === "table" && (
-              <div className="overflow-x-auto">
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="border-b border-slate-200">
-                      <th className="text-left py-2 px-2 text-slate-500 font-semibold">Label</th>
-                      <th className="text-left py-2 px-2 text-slate-500 font-semibold">Verdict</th>
-                      <th className="text-center py-2 px-2 text-slate-500 font-semibold">AI%</th>
-                      <th className="text-center py-2 px-2 text-[#1b3a6b] font-semibold">PS</th>
-                      <th className="text-center py-2 px-2 text-[#16a34a] font-semibold">BC</th>
-                      {hasGT && <th className="text-center py-2 px-2 text-slate-500 font-semibold">Truth</th>}
-                      {hasGT && <th className="text-center py-2 px-2 text-slate-500 font-semibold">Correct?</th>}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {results.map(r => {
-                      const predictedAI = r.combinedAI >= rocThreshold;
-                      const correct = r.row.groundTruth
-                        ? (r.row.groundTruth === "AI" ? predictedAI : !predictedAI)
-                        : undefined;
-                      const tier = getTier(r.combinedAI);
-                      return (
-                        <tr key={r.row.id} className="border-b border-slate-50 hover:bg-slate-50/50 transition-colors">
-                          <td className="py-1.5 px-2 text-slate-700 max-w-[120px] truncate">{r.row.label ?? r.row.id}</td>
-                          <td className="py-1.5 px-2">
-                            <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold" style={{ color: tier.color, background: tier.bg, border: `1px solid ${tier.border}` }}>
-                              {r.verdict}
-                            </span>
-                          </td>
-                          <td className="py-1.5 px-2 text-center font-bold" style={{ color: r.combinedAI >= 70 ? "#dc2626" : r.combinedAI >= 50 ? "#d97706" : "#16a34a" }}>{r.combinedAI}%</td>
-                          <td className="py-1.5 px-2 text-center text-slate-500">{r.perpScore}</td>
-                          <td className="py-1.5 px-2 text-center text-slate-500">{r.burstScore}</td>
-                          {hasGT && <td className="py-1.5 px-2 text-center">
-                            <span className={`px-1 py-0.5 rounded text-[9px] font-bold ${r.row.groundTruth === "AI" ? "bg-red-100 text-red-700" : "bg-emerald-100 text-emerald-700"}`}>{r.row.groundTruth ?? "—"}</span>
-                          </td>}
-                          {hasGT && <td className="py-1.5 px-2 text-center">{correct === undefined ? "—" : correct ? "✓" : "✗"}</td>}
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-
-            {/* Engine Comparison */}
-            {activeMetricTab === "compare" && (
-              <div className="space-y-4">
-                <p className="text-xs font-bold text-slate-700">PS vs BC Score Distribution</p>
-                <div className="space-y-2">
-                  {results.map(r => (
-                    <div key={r.row.id} className="flex items-center gap-3">
-                      <span className="text-[10px] text-slate-500 w-24 truncate flex-shrink-0">{r.row.label ?? r.row.id}</span>
-                      <div className="flex-1 flex gap-1 items-center">
-                        <div className="flex-1 h-3 bg-slate-100 rounded-full overflow-hidden relative">
-                          <div className="h-full rounded-full transition-all" style={{ width: `${r.perpScore}%`, background: "#1b3a6b", opacity: 0.85 }} />
-                        </div>
-                        <span className="text-[9px] font-bold text-[#1b3a6b] w-6 text-right">{r.perpScore}</span>
-                        <div className="flex-1 h-3 bg-slate-100 rounded-full overflow-hidden">
-                          <div className="h-full rounded-full transition-all" style={{ width: `${r.burstScore}%`, background: "#16a34a", opacity: 0.85 }} />
-                        </div>
-                        <span className="text-[9px] font-bold text-[#16a34a] w-6 text-right">{r.burstScore}</span>
-                        <div className="flex-1 h-3 bg-slate-100 rounded-full overflow-hidden">
-                          <div className="h-full rounded-full" style={{ width: `${r.combinedAI}%`, background: r.combinedAI >= 70 ? "#dc2626" : r.combinedAI >= 50 ? "#d97706" : "#16a34a" }} />
-                        </div>
-                        <span className="text-[9px] font-bold text-slate-600 w-6 text-right">{r.combinedAI}%</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-                <div className="flex items-center gap-4 text-[10px]">
-                  <span className="flex items-center gap-1"><span className="w-3 h-2 rounded-full bg-[#1b3a6b] inline-block"/>PS Score</span>
-                  <span className="flex items-center gap-1"><span className="w-3 h-2 rounded-full bg-[#16a34a] inline-block"/>BC Score</span>
-                  <span className="flex items-center gap-1"><span className="w-3 h-2 rounded-full bg-slate-400 inline-block"/>Combined</span>
-                </div>
-                {/* Scatter correlation */}
-                <div className="mt-4">
-                  <p className="text-xs font-bold text-slate-700 mb-2">PS vs BC Correlation</p>
-                  <div className="relative bg-slate-50 border border-slate-200 rounded-xl overflow-hidden" style={{ height: 200 }}>
-                    <svg width="100%" height="200" viewBox="0 0 400 200">
-                      {/* Axes */}
-                      <line x1="40" y1="10" x2="40" y2="170" stroke="#e2e8f0" strokeWidth="1"/>
-                      <line x1="40" y1="170" x2="390" y2="170" stroke="#e2e8f0" strokeWidth="1"/>
-                      {/* Diagonal reference */}
-                      <line x1="40" y1="170" x2="390" y2="10" stroke="#cbd5e1" strokeWidth="0.8" strokeDasharray="4 3"/>
-                      {/* Points */}
-                      {results.map((r, i) => {
-                        const cx = 40 + (r.perpScore / 100) * 350;
-                        const cy = 170 - (r.burstScore / 100) * 160;
-                        const col = r.combinedAI >= 70 ? "#dc2626" : r.combinedAI >= 50 ? "#d97706" : "#16a34a";
-                        return <circle key={i} cx={cx} cy={cy} r="4" fill={col} fillOpacity={0.7} />;
-                      })}
-                      <text x="215" y="190" textAnchor="middle" fontSize="9" fill="#94a3b8">PS Score</text>
-                      <text x="15" y="95" textAnchor="middle" fontSize="9" fill="#94a3b8" transform="rotate(-90 15 95)">BC Score</text>
-                    </svg>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* ROC Curve */}
-            {activeMetricTab === "roc" && rocPoints.length > 0 && (
-              <div>
-                <div className="flex items-center justify-between mb-3">
-                  <p className="text-xs font-bold text-slate-700">ROC Curve</p>
-                  <span className="text-xs font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded-full">AUC = {computeAUC(rocPoints).toFixed(3)}</span>
-                </div>
-                <div className="relative bg-slate-50 border border-slate-200 rounded-xl overflow-hidden" style={{ height: 280 }}>
-                  <svg width="100%" height="280" viewBox="0 0 360 280">
-                    {/* Grid */}
-                    {[0,0.25,0.5,0.75,1].map(v => (
-                      <g key={v}>
-                        <line x1="40" y1={240 - v * 200} x2="340" y2={240 - v * 200} stroke="#e2e8f0" strokeWidth="0.5"/>
-                        <line x1={40 + v * 300} y1="40" x2={40 + v * 300} y2="240" stroke="#e2e8f0" strokeWidth="0.5"/>
-                        <text x="35" y={244 - v * 200} textAnchor="end" fontSize="8" fill="#94a3b8">{Math.round(v * 100)}%</text>
-                        <text x={40 + v * 300} y="252" textAnchor="middle" fontSize="8" fill="#94a3b8">{Math.round(v * 100)}%</text>
-                      </g>
-                    ))}
-                    {/* Diagonal */}
-                    <line x1="40" y1="240" x2="340" y2="40" stroke="#cbd5e1" strokeWidth="1" strokeDasharray="4 3"/>
-                    {/* ROC polyline */}
-                    <polyline
-                      fill="rgba(79,70,229,0.12)"
-                      stroke="#4f46e5"
-                      strokeWidth="2"
-                      points={[...rocPoints.map(p => `${40 + p.fpr * 300},${240 - p.tpr * 200}`), "40,240"].join(" ")}
-                    />
-                    {rocPoints.map((p, i) => (
-                      <circle key={i} cx={40 + p.fpr * 300} cy={240 - p.tpr * 200} r="3" fill="#4f46e5" />
-                    ))}
-                    <text x="190" y="268" textAnchor="middle" fontSize="9" fill="#64748b">False Positive Rate</text>
-                    <text x="12" y="145" textAnchor="middle" fontSize="9" fill="#64748b" transform="rotate(-90 12 145)">True Positive Rate</text>
-                  </svg>
-                </div>
-                <p className="text-[10px] text-slate-400 mt-2 text-center">Each point = one detection threshold (0%–100%). AUC ≈ 1.0 = perfect; 0.5 = random.</p>
-              </div>
-            )}
-
-            {/* Confusion Matrix */}
-            {activeMetricTab === "confusion" && metrics && (
-              <div>
-                <p className="text-xs font-bold text-slate-700 mb-3">Confusion Matrix (threshold: {rocThreshold}%)</p>
-                <div className="flex justify-center">
-                  <div className="grid gap-2" style={{ gridTemplateColumns: "auto 1fr 1fr" }}>
-                    <div />
-                    <div className="text-center text-xs font-bold text-slate-500 pb-1">Predicted AI</div>
-                    <div className="text-center text-xs font-bold text-slate-500 pb-1">Predicted Human</div>
-                    <div className="text-xs font-bold text-slate-500 text-right pr-2 flex items-center">Actual AI</div>
-                    <div className="rounded-xl bg-emerald-50 border border-emerald-300 p-5 text-center">
-                      <p className="text-2xl font-black text-emerald-700">{metrics.tp}</p>
-                      <p className="text-[9px] text-emerald-600 font-semibold">True Positive</p>
-                    </div>
-                    <div className="rounded-xl bg-red-50 border border-red-200 p-5 text-center">
-                      <p className="text-2xl font-black text-red-600">{metrics.fn}</p>
-                      <p className="text-[9px] text-red-500 font-semibold">False Negative</p>
-                    </div>
-                    <div className="text-xs font-bold text-slate-500 text-right pr-2 flex items-center">Actual Human</div>
-                    <div className="rounded-xl bg-red-50 border border-red-200 p-5 text-center">
-                      <p className="text-2xl font-black text-red-600">{metrics.fp}</p>
-                      <p className="text-[9px] text-red-500 font-semibold">False Positive</p>
-                    </div>
-                    <div className="rounded-xl bg-emerald-50 border border-emerald-300 p-5 text-center">
-                      <p className="text-2xl font-black text-emerald-700">{metrics.tn}</p>
-                      <p className="text-[9px] text-emerald-600 font-semibold">True Negative</p>
-                    </div>
-                  </div>
-                </div>
-                <p className="text-[10px] text-slate-400 mt-4 text-center">
-                  FPR (false alarm rate): {metrics.fp + metrics.tn > 0 ? ((metrics.fp / (metrics.fp + metrics.tn)) * 100).toFixed(1) : "—"}% &nbsp;·&nbsp;
-                  FNR (miss rate): {metrics.tp + metrics.fn > 0 ? ((metrics.fn / (metrics.tp + metrics.fn)) * 100).toFixed(1) : "—"}%
-                </p>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-//  FEATURE 2: EXPERIMENT TRACKING PANEL
-// ═══════════════════════════════════════════════════════════════════════════════
-
-function ExperimentTrackingPanel({ experiments, onClear }: { experiments: ExperimentRun[]; onClear: () => void }) {
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const selected = experiments.find(e => e.id === selectedId);
-
-  if (experiments.length === 0) return (
-    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-8 text-center">
-      <div className="text-4xl mb-3 opacity-20">🧪</div>
-      <p className="text-sm font-medium text-slate-400">No batch runs yet</p>
-      <p className="text-xs text-slate-300 mt-1">Run a dataset evaluation to track experiments here</p>
-    </div>
-  );
-
-  return (
-    <div className="grid lg:grid-cols-3 gap-5">
-      {/* Run list */}
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-        <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
-          <p className="text-xs font-bold text-slate-700">Batch Runs</p>
-          <button onClick={onClear} className="text-[10px] text-slate-400 hover:text-red-500 transition-colors">Clear all</button>
-        </div>
-        <div className="divide-y divide-slate-50">
-          {experiments.map(run => (
-            <button key={run.id} onClick={() => setSelectedId(run.id === selectedId ? null : run.id)}
-              className={`w-full text-left px-4 py-3 hover:bg-slate-50 transition-colors ${selectedId === run.id ? "bg-blue-50 border-l-2 border-blue-500" : ""}`}>
-              <div className="flex items-center justify-between mb-0.5">
-                <p className="text-xs font-bold text-slate-800 truncate">{run.name}</p>
-                <span className="text-[9px] text-slate-400 flex-shrink-0 ml-2">{new Date(run.ts).toLocaleDateString()}</span>
-              </div>
-              <div className="flex items-center gap-2 text-[10px] text-slate-500">
-                <span>{run.rowCount} texts</span>
-                <span>·</span>
-                <span className="text-red-600 font-semibold">{run.aiCount} AI</span>
-                <span>·</span>
-                <span className="text-emerald-600 font-semibold">{run.humanCount} Human</span>
-              </div>
-              {run.accuracy !== undefined && (
-                <div className="mt-1 flex items-center gap-2 text-[10px]">
-                  <span className="text-indigo-600 font-bold">Acc: {(run.accuracy * 100).toFixed(1)}%</span>
-                  {run.auc !== undefined && <span className="text-slate-400">AUC: {run.auc.toFixed(3)}</span>}
-                </div>
-              )}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Detail */}
-      <div className="lg:col-span-2">
-        {selected ? (
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 space-y-5">
-            <div>
-              <p className="text-sm font-bold text-slate-800">{selected.name}</p>
-              <p className="text-xs text-slate-400">{new Date(selected.ts).toLocaleString()} · {selected.rowCount} texts</p>
-            </div>
-
-            {/* Score distribution bar chart */}
-            <div>
-              <p className="text-xs font-bold text-slate-700 mb-3">AI Score Distribution</p>
-              <div className="flex items-end gap-1 h-24">
-                {Array.from({ length: 10 }, (_, i) => {
-                  const lo = i * 10, hi = lo + 10;
-                  const count = selected.results.filter(r => r.combinedAI >= lo && r.combinedAI < hi).length;
-                  const maxCount = Math.max(...Array.from({ length: 10 }, (_, j) =>
-                    selected.results.filter(r => r.combinedAI >= j * 10 && r.combinedAI < j * 10 + 10).length), 1);
-                  const pct = (count / maxCount) * 100;
-                  const col = lo >= 70 ? "#dc2626" : lo >= 50 ? "#d97706" : "#16a34a";
-                  return (
-                    <div key={i} className="flex-1 flex flex-col items-center gap-1">
-                      <span className="text-[8px] text-slate-400">{count}</span>
-                      <div className="w-full rounded-t-sm transition-all" style={{ height: `${Math.max(2, pct * 0.8)}px`, background: col, minHeight: count > 0 ? 4 : 0 }} />
-                      <span className="text-[8px] text-slate-400">{lo}</span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Metrics comparison if ground truth */}
-            {selected.accuracy !== undefined && (
-              <div className="grid grid-cols-2 gap-3">
-                {[
-                  { label: "Accuracy", val: `${(selected.accuracy! * 100).toFixed(1)}%`, note: "Overall correct predictions" },
-                  { label: "Precision", val: `${(selected.precision! * 100).toFixed(1)}%`, note: "Of AI flags, how many were right" },
-                  { label: "Recall (TPR)", val: `${(selected.recall! * 100).toFixed(1)}%`, note: "Of actual AI texts, how many caught" },
-                  { label: "F1 Score", val: selected.f1!.toFixed(3), note: "Harmonic mean of precision & recall" },
-                  { label: "AUC", val: selected.auc?.toFixed(3) ?? "—", note: "Area under ROC curve" },
-                ].map(({ label, val, note }) => (
-                  <div key={label} className="rounded-xl border border-indigo-100 bg-indigo-50 p-3">
-                    <p className="text-sm font-black text-indigo-700">{val}</p>
-                    <p className="text-[10px] font-bold text-indigo-600">{label}</p>
-                    <p className="text-[9px] text-indigo-400 mt-0.5">{note}</p>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* Export JSON */}
-            <button onClick={() => {
-              const blob = new Blob([JSON.stringify(selected, null, 2)], { type: "application/json" });
-              const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
-              a.download = `${selected.name.replace(/\s+/g, "_")}.json`; a.click();
-            }} className="flex items-center gap-2 text-xs text-slate-500 hover:text-slate-700 border border-slate-200 px-3 py-1.5 rounded-lg hover:bg-slate-50 transition-colors">
-              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
-              Export run as JSON
-            </button>
-          </div>
-        ) : (
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-8 text-center">
-            <p className="text-sm text-slate-400">Select a run to view details</p>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-//  FEATURE 3: SHAP-LIKE SIGNAL EXPLANATION VIEWER
-// ═══════════════════════════════════════════════════════════════════════════════
-
-function ShapExplainerPanel({ perpResult, burstResult }: { perpResult: EngineResult | null; burstResult: EngineResult | null }) {
-  const [engine, setEngine] = useState<"all" | "PS" | "BC">("all");
-  const shapValues = useMemo(() => computeShapValues(perpResult, burstResult), [perpResult, burstResult]);
-  const filtered = engine === "all" ? shapValues : shapValues.filter(e => e.engine === engine);
-
-  if (!perpResult && !burstResult) return (
-    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-8 text-center">
-      <div className="text-4xl mb-3 opacity-20">🔍</div>
-      <p className="text-sm text-slate-400">Run an analysis first to see signal attributions</p>
-    </div>
-  );
-
-  const maxDelta = Math.max(...filtered.map(e => Math.abs(e.delta)), 1);
-
-  return (
-    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-      <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
-        <div>
-          <p className="text-sm font-bold text-slate-800">Signal Attribution (SHAP-style)</p>
-          <p className="text-xs text-slate-500 mt-0.5">Approximate contribution of each signal to the AI score. Red = pushes toward AI, Green = pushes toward Human.</p>
-        </div>
-        <div className="flex gap-1 bg-slate-100 rounded-xl p-1 flex-shrink-0">
-          {(["all", "PS", "BC"] as const).map(e => (
-            <button key={e} onClick={() => setEngine(e)}
-              className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${engine === e ? "bg-white text-slate-900 shadow-sm" : "text-slate-500"}`}>
-              {e}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="p-5 space-y-2">
-        {/* Legend */}
-        <div className="flex items-center gap-6 mb-4 text-[10px] text-slate-500">
-          <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-red-400 inline-block" />Pushes toward AI</span>
-          <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-emerald-400 inline-block" />Pushes toward Human</span>
-          <span className="flex items-center gap-1.5">
-            <span className="text-[9px] font-bold text-[#1b3a6b] bg-[#e8f0fe] px-1.5 py-0.5 rounded">PS</span>
-            <span className="text-[9px] font-bold text-[#16a34a] bg-emerald-50 px-1.5 py-0.5 rounded">BC</span>
-          </span>
-        </div>
-
-        {filtered.length === 0 && <p className="text-xs text-slate-400 text-center py-4">No signals for this engine filter.</p>}
-
-        {filtered.map((entry, i) => {
-          const barPct = Math.abs(entry.delta) / maxDelta * 100;
-          const isAI = entry.delta > 0;
-          return (
-            <div key={i} className="flex items-center gap-3">
-              <span className={`text-[9px] font-bold px-1 py-0.5 rounded flex-shrink-0 ${entry.engine === "PS" ? "bg-blue-100 text-[#1b3a6b]" : "bg-emerald-100 text-[#16a34a]"}`}>
-                {entry.engine}
-              </span>
-              <span className="text-[10px] text-slate-700 flex-1 truncate min-w-0" title={entry.signal}>{entry.signal}</span>
-              <div className="w-40 flex items-center">
-                <div className="flex-1 h-4 bg-slate-100 rounded-full overflow-hidden">
-                  <div
-                    className="h-full rounded-full transition-all duration-500"
-                    style={{
-                      width: `${barPct}%`,
-                      background: isAI
-                        ? `linear-gradient(90deg, #fca5a5, #dc2626)`
-                        : `linear-gradient(90deg, #86efac, #16a34a)`,
-                    }}
-                  />
-                </div>
-              </div>
-              <span className={`text-[10px] font-bold w-10 text-right flex-shrink-0 ${isAI ? "text-red-600" : "text-emerald-600"}`}>
-                {isAI ? "+" : ""}{entry.delta.toFixed(1)}
-              </span>
-            </div>
-          );
-        })}
-
-        <p className="text-[9px] text-slate-400 pt-3 leading-relaxed">
-          Deltas are approximations derived from each signal's reported strength relative to the engine's total score. These are heuristic attribution estimates, not true Shapley values — for interpretability guidance only.
-        </p>
-      </div>
-    </div>
-  );
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-//  FEATURE 4: REAL-TIME MONITORING DASHBOARD
-// ═══════════════════════════════════════════════════════════════════════════════
-
-function MonitoringDashboard() {
-  const [events, setEvents] = useState<MonitoringEvent[]>([]);
-
-  useEffect(() => {
-    setEvents(loadMonitoringEventsLocal());
-    const handler = () => setEvents(loadMonitoringEventsLocal());
-    window.addEventListener("aidetect_scan", handler);
-    return () => window.removeEventListener("aidetect_scan", handler);
-  }, []);
-
-  if (events.length === 0) return (
-    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-8 text-center">
-      <div className="text-4xl mb-3 opacity-20">📡</div>
-      <p className="text-sm text-slate-400 font-medium">No scans yet this session</p>
-      <p className="text-xs text-slate-300 mt-1">The monitoring dashboard tracks scans as you run them. Analyze a text to begin.</p>
-    </div>
-  );
-
-  // Volume over time (last 20 events grouped by minute)
-  const recent50 = events.slice(0, 50);
-  const avgAI = Math.round(recent50.reduce((s, e) => s + e.aiPct, 0) / recent50.length);
-  const aiRate = recent50.filter(e => e.aiPct >= 50).length / recent50.length;
-  const drift = recent50.length >= 10 ? (() => {
-    const firstHalf = recent50.slice(Math.floor(recent50.length / 2));
-    const secondHalf = recent50.slice(0, Math.floor(recent50.length / 2));
-    const f = firstHalf.reduce((s, e) => s + e.aiPct, 0) / firstHalf.length;
-    const s = secondHalf.reduce((s, e) => s + e.aiPct, 0) / secondHalf.length;
-    return s - f; // positive = trending toward AI
-  })() : null;
-
-  // Score distribution
-  const buckets = Array.from({ length: 10 }, (_, i) => ({
-    lo: i * 10, hi: i * 10 + 10,
-    count: recent50.filter(e => e.aiPct >= i * 10 && e.aiPct < i * 10 + 10).length,
-  }));
-  const maxBucket = Math.max(...buckets.map(b => b.count), 1);
-
-  return (
-    <div className="space-y-5">
-      {/* KPI row */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        {[
-          { label: "Total Scans", val: events.length, color: "#1b3a6b" },
-          { label: "Avg AI Score", val: `${avgAI}%`, color: avgAI >= 60 ? "#dc2626" : avgAI >= 40 ? "#d97706" : "#16a34a" },
-          { label: "AI Flag Rate", val: `${Math.round(aiRate * 100)}%`, color: aiRate >= 0.5 ? "#dc2626" : aiRate >= 0.3 ? "#d97706" : "#16a34a" },
-          { label: "Score Drift", val: drift !== null ? `${drift > 0 ? "+" : ""}${drift.toFixed(1)}` : "—", color: drift !== null && Math.abs(drift) > 10 ? "#d97706" : "#64748b" },
-        ].map(({ label, val, color }) => (
-          <div key={label} className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 text-center">
-            <p className="text-2xl font-black" style={{ color }}>{val}</p>
-            <p className="text-[10px] font-semibold text-slate-500 mt-0.5">{label}</p>
-          </div>
-        ))}
-      </div>
-
-      <div className="grid lg:grid-cols-2 gap-5">
-        {/* Score over time sparkline */}
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
-          <p className="text-xs font-bold text-slate-800 mb-4">AI Score Over Time (last {Math.min(recent50.length, 50)} scans)</p>
-          <div className="relative" style={{ height: 120 }}>
-            <svg width="100%" height="120" viewBox={`0 0 400 120`} preserveAspectRatio="none">
-              {/* Grid lines */}
-              {[25, 50, 75].map(v => (
-                <line key={v} x1="0" y1={120 - v * 1.1} x2="400" y2={120 - v * 1.1} stroke="#f1f5f9" strokeWidth="1"/>
-              ))}
-              {/* Alert line at 50% */}
-              <line x1="0" y1={120 - 50 * 1.1} x2="400" y2={120 - 50 * 1.1} stroke="#fca5a5" strokeWidth="1" strokeDasharray="4 3"/>
-              {/* Data polyline */}
-              {recent50.length > 1 && (
-                <polyline
-                  fill="none"
-                  stroke="#3b82f6"
-                  strokeWidth="2"
-                  strokeLinejoin="round"
-                  points={[...recent50].reverse().map((e, i) => {
-                    const x = (i / (recent50.length - 1)) * 400;
-                    const y = 120 - e.aiPct * 1.1;
-                    return `${x},${y}`;
-                  }).join(" ")}
-                />
-              )}
-              {/* Points */}
-              {[...recent50].reverse().map((e, i) => {
-                const x = (i / Math.max(recent50.length - 1, 1)) * 400;
-                const y = 120 - e.aiPct * 1.1;
-                const col = e.aiPct >= 70 ? "#dc2626" : e.aiPct >= 50 ? "#d97706" : "#16a34a";
-                return <circle key={i} cx={x} cy={y} r="3" fill={col} />;
-              })}
-            </svg>
-            <div className="absolute right-0 top-0 text-[8px] text-slate-400">100%</div>
-            <div className="absolute right-0 bottom-0 text-[8px] text-slate-400">0%</div>
-          </div>
-
-          {drift !== null && Math.abs(drift) > 10 && (
-            <div className={`mt-3 rounded-lg px-3 py-2 text-xs font-semibold ${drift > 0 ? "bg-red-50 border border-red-200 text-red-700" : "bg-emerald-50 border border-emerald-200 text-emerald-700"}`}>
-              {drift > 0 ? `⚠ Score trending upward (+${drift.toFixed(1)} pts) — possible increase in AI-flagged submissions` : `✓ Score trending downward (${drift.toFixed(1)} pts) — AI flags decreasing`}
-            </div>
-          )}
-        </div>
-
-        {/* Distribution histogram */}
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
-          <p className="text-xs font-bold text-slate-800 mb-4">Score Distribution</p>
-          <div className="flex items-end gap-1.5 h-28">
-            {buckets.map(({ lo, hi, count }) => {
-              const pct = (count / maxBucket) * 100;
-              const col = lo >= 70 ? "#dc2626" : lo >= 50 ? "#d97706" : "#16a34a";
-              return (
-                <div key={lo} className="flex-1 flex flex-col items-center gap-0.5">
-                  <span className="text-[8px] text-slate-400 min-h-[12px]">{count > 0 ? count : ""}</span>
-                  <div className="w-full rounded-t-sm" style={{ height: `${Math.max(pct * 0.85, count > 0 ? 4 : 0)}px`, background: col }} />
-                  <span className="text-[8px] text-slate-400">{lo}</span>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-
-      {/* Recent events table */}
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-        <div className="px-5 py-3 border-b border-slate-100 flex items-center justify-between">
-          <p className="text-xs font-bold text-slate-700">Recent Scan Events</p>
-          <button onClick={() => { localStorage.removeItem("aidetect_monitoring"); saveMonitoringEventAsync && fsSet(`users/${uid()}/monitoring`, { events: [] }); setEvents([]); }}
-            className="text-[10px] text-slate-400 hover:text-red-500 transition-colors">Clear</button>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="border-b border-slate-100">
-                <th className="text-left py-2 px-4 text-slate-400 font-semibold">Time</th>
-                <th className="text-left py-2 px-4 text-slate-400 font-semibold">Verdict</th>
-                <th className="text-center py-2 px-4 text-slate-400 font-semibold">AI Score</th>
-                <th className="text-center py-2 px-4 text-slate-400 font-semibold">Words</th>
-              </tr>
-            </thead>
-            <tbody>
-              {events.slice(0, 20).map((e, i) => {
-                const tier = getTier(e.aiPct);
-                return (
-                  <tr key={i} className="border-b border-slate-50 hover:bg-slate-50/50">
-                    <td className="py-1.5 px-4 text-slate-500">{new Date(e.ts).toLocaleTimeString()}</td>
-                    <td className="py-1.5 px-4">
-                      <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full" style={{ color: tier.color, background: tier.bg }}>
-                        {e.verdict}
-                      </span>
-                    </td>
-                    <td className="py-1.5 px-4 text-center font-bold" style={{ color: e.aiPct >= 70 ? "#dc2626" : e.aiPct >= 50 ? "#d97706" : "#16a34a" }}>{e.aiPct}%</td>
-                    <td className="py-1.5 px-4 text-center text-slate-400">{e.wordCount}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ── PAGE ──────────────────────────────────────────────────────────────────────
 
 export default function DetectorPage() {
@@ -9450,26 +7958,19 @@ export default function DetectorPage() {
   const [dragOver,       setDragOver]       = useState(false);
   const [urlInput,       setUrlInput]       = useState("");
   const [urlLoading,     setUrlLoading]     = useState(false);
-  const { user, loading: authLoading, error: authError, signInWithGoogle, signInAnon, signOut } = useFirebaseAuth();
   const [history,        setHistory]        = useState<ScanRecord[]>([]);
-  const [activeTab,      setActiveTab]      = useState<"analyze" | "history" | "dataset" | "experiments" | "shap" | "monitoring">("analyze");
+  const [activeTab,      setActiveTab]      = useState<"analyze" | "history">("analyze");
   const [showShare,      setShowShare]      = useState(false);
   const [showHighlighter,setShowHighlighter]= useState(false);
   const [evasionResult,  setEvasionResult]  = useState<{ detected: boolean; types: string[] } | null>(null);
-  const [experiments,    setExperiments]    = useState<ExperimentRun[]>([]);
 
   const fileInputRef    = useRef<HTMLInputElement>(null);
   const textareaRef     = useRef<HTMLTextAreaElement>(null);
   const engineAContextRef = useRef<{ score: number; topSignals: string[]; evidenceStrength: string } | null>(null);
   const engineBContextRef = useRef<{ score: number; topSignals: string[]; evidenceStrength: string } | null>(null);
 
-  // Load history on mount and reload when user signs in/changes
-  useEffect(() => {
-    Promise.all([loadHistoryAsync(), loadExperimentsAsync()]).then(([h, e]) => {
-      setHistory(h);
-      setExperiments(e);
-    });
-  }, [user]);
+  // Load history on mount
+  useEffect(() => { setHistory(loadHistory()); }, []);
 
   // OPT P7: Stable refs for keyboard shortcut — declared here, synced after loading/inputText defined.
   // This avoids re-registering the keydown listener on every render (original bug: no [] on useEffect).
@@ -9646,7 +8147,7 @@ export default function DetectorPage() {
   const combined = useMemo(() => {
     const raw = getCombined();
     if (!raw) return null;
-    const cal = loadCalibrationLocal();
+    const cal = loadCalibration();
     const shift = getBayesianThresholdShift(raw.avgAI, cal);
     if (shift === 0) return raw;
     const adjusted = Math.max(0, Math.min(100, raw.avgAI + shift));
@@ -9755,12 +8256,8 @@ export default function DetectorPage() {
             const avgAI = Math.round((pBd.ai + bBd.ai) / 2);
             const tier  = getTier(avgAI);
             const rec: ScanRecord = { id: Date.now().toString(), ts: Date.now(), snippet: sanitised.slice(0, 80) + (sanitised.length > 80 ? "…" : ""), wordCount: wc, verdict: tier.label, aiPct: avgAI, evidenceStrength: pF.evidenceStrength };
-            const updated = [rec, ...loadHistoryLocal()];
-            saveHistoryAsync(updated); setHistory(updated);
-            // Monitoring: emit scan event for real-time dashboard
-            const monEvt = { ts: Date.now(), aiPct: avgAI, verdict: tier.label, wordCount: wc };
-            saveMonitoringEventAsync(monEvt);
-            window.dispatchEvent(new Event("aidetect_scan"));
+            const updated = [rec, ...loadHistory()];
+            saveHistory(updated); setHistory(updated);
           } catch (e) { console.error(e); }
           setLoadingG(false);
         }, 200);
@@ -9879,33 +8376,14 @@ export default function DetectorPage() {
             <span className="text-[10px] text-slate-400">{MODEL_SIGNALS}</span>
           </div> */}
 
-          {/* Auth bar */}
-          <div className="flex justify-end mb-2">
-            <AuthBar
-              user={user}
-              loading={authLoading}
-              error={authError}
-              onGoogle={signInWithGoogle}
-              onAnon={signInAnon}
-              onSignOut={signOut}
-            />
-          </div>
-
           {/* Nav tabs */}
-          <nav className="flex items-center gap-1 bg-slate-100 rounded-xl p-1 flex-wrap">
-            {([
-              { id: "analyze", label: "Analyze" },
-              { id: "history", label: `History${history.length > 0 ? ` (${history.length})` : ""}` },
-              { id: "dataset", label: "Dataset" },
-              { id: "experiments", label: `Experiments${experiments.length > 0 ? ` (${experiments.length})` : ""}` },
-              { id: "shap", label: "Signals" },
-              { id: "monitoring", label: "Monitor" },
-            ] as const).map(tab => (
-              <button key={tab.id} onClick={() => setActiveTab(tab.id)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                  activeTab === tab.id ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"
+          <nav className="flex items-center gap-1 bg-slate-100 rounded-xl p-1">
+            {(["analyze", "history"] as const).map(tab => (
+              <button key={tab} onClick={() => setActiveTab(tab)}
+                className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold capitalize transition-all ${
+                  activeTab === tab ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"
                 }`}>
-                {tab.label}
+                {tab === "history" ? `${tab} ${history.length > 0 ? `(${history.length})` : ""}` : tab}
               </button>
             ))}
           </nav>
@@ -9924,32 +8402,8 @@ export default function DetectorPage() {
         {/* ── History Tab ──────────────────────────────────────────────── */}
         {activeTab === "history" && (
           <div className="max-w-xl mx-auto bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-            <HistoryPanel history={history} onSelect={() => setActiveTab("analyze")} onClear={() => { saveHistoryAsync([]); setHistory([]); }} />
+            <HistoryPanel history={history} onSelect={() => setActiveTab("analyze")} onClear={() => { saveHistory([]); setHistory([]); }} />
           </div>
-        )}
-
-        {/* ── Dataset Tab ──────────────────────────────────────────────── */}
-        {activeTab === "dataset" && (
-          <DatasetEvaluationPanel onRunComplete={(run) => {
-            const updated = [run, ...loadExperimentsLocal()];
-            saveExperimentsAsync(updated);
-            setExperiments(updated);
-          }} />
-        )}
-
-        {/* ── Experiments Tab ──────────────────────────────────────────── */}
-        {activeTab === "experiments" && (
-          <ExperimentTrackingPanel experiments={experiments} onClear={() => { saveExperimentsAsync([]); setExperiments([]); }} />
-        )}
-
-        {/* ── SHAP / Signal Attribution Tab ────────────────────────────── */}
-        {activeTab === "shap" && (
-          <ShapExplainerPanel perpResult={perpResult} burstResult={burstResult} />
-        )}
-
-        {/* ── Monitoring Tab ────────────────────────────────────────────── */}
-        {activeTab === "monitoring" && (
-          <MonitoringDashboard />
         )}
 
         {/* ── Analyze Tab ───────────────────────────────────────────────── */}
@@ -10657,8 +9111,8 @@ export default function DetectorPage() {
                           setJudgeNotes(newVal ? buildJudgmentBasis(newVal) : "");
                           if (newVal && combined) {
                             recordReviewerFeedback(combined.tier.label, newVal, combined.avgAI);
-                            const h = loadHistoryLocal();
-                            if (h.length > 0) { h[0].reviewerVerdict = newVal; saveHistoryAsync(h); setHistory(h); }
+                            const h = loadHistory();
+                            if (h.length > 0) { h[0].reviewerVerdict = newVal; saveHistory(h); setHistory(h); }
                           }
                         }}
                           className="flex items-center gap-2 px-4 py-2.5 rounded-xl border text-sm font-semibold transition-all"
