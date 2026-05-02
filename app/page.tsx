@@ -487,17 +487,19 @@ function parseJSONDataset(text: string): DatasetRow[] {
   try {
     const data = JSON.parse(text);
     const arr: any[] = Array.isArray(data) ? data : data.texts ?? data.rows ?? data.data ?? [];
-    return arr.map((item: any, i: number) => ({
-      id: String(item.id ?? i + 1),
-      text: String(item.text ?? item.content ?? item.body ?? item.passage ?? ""),
-      label: String(item.label ?? item.name ?? item.title ?? `Item ${i + 1}`),
-      groundTruth: (() => {
-        const gt = String(item.groundTruth ?? item.ground_truth ?? item.truth ?? item.class ?? "").toLowerCase();
-        return gt === "ai" || gt === "ai-generated" || gt === "1" ? "AI"
-          : gt === "human" || gt === "human-written" || gt === "0" ? "Human"
-          : undefined;
-      })(),
-    })).filter((r: DatasetRow) => r.text.length >= 20);
+    return arr.map((item: any, i: number): DatasetRow => {
+      const gt = String(item.groundTruth ?? item.ground_truth ?? item.truth ?? item.class ?? "").toLowerCase();
+      const groundTruth: "AI" | "Human" | undefined =
+        gt === "ai" || gt === "ai-generated" || gt === "1" ? "AI"
+        : gt === "human" || gt === "human-written" || gt === "0" ? "Human"
+        : undefined;
+      return {
+        id: String(item.id ?? i + 1),
+        text: String(item.text ?? item.content ?? item.body ?? item.passage ?? ""),
+        label: String(item.label ?? item.name ?? item.title ?? `Item ${i + 1}`),
+        groundTruth,
+      };
+    }).filter((r: DatasetRow) => r.text.length >= 20);
   } catch { return []; }
 }
 
