@@ -4752,6 +4752,7 @@ interface MemoCache {
   text: string;
   perpResult: EngineResult;
   burstResult: EngineResult;
+  neuralResult: EngineResult | null;
   timestamp: number;
 }
 
@@ -10087,6 +10088,10 @@ export default function DetectorPage() {
           engineBContextRef.current = { score: _analysisCache.burstResult.internalScore, evidenceStrength: _analysisCache.burstResult.evidenceStrength, topSignals: _analysisCache.burstResult.signals.filter(s => s.pointsToAI && s.strength >= 30).sort((a,b) => b.strength - a.strength).slice(0,4).map(s => `${s.name}: ${s.strength}%`) };
           setRawPerpResult(_analysisCache.perpResult); setRawBurstResult(_analysisCache.burstResult);
           setPerpResult(_analysisCache.perpResult);    setBurstResult(_analysisCache.burstResult);
+          if ("neuralResult" in _analysisCache) {
+            setNeuralResult(_analysisCache.neuralResult);
+            setLoadingN(false);
+          }
           setLoadingT(false); setLoadingG(false);
           return;
         }
@@ -10117,7 +10122,7 @@ export default function DetectorPage() {
               }
             }
 
-            _analysisCache = { text: sanitised, perpResult: pF, burstResult: bF, timestamp: Date.now() };
+            _analysisCache = { text: sanitised, perpResult: pF, burstResult: bF, neuralResult: null, timestamp: Date.now() };
             engineAContextRef.current = { score: pF.internalScore, evidenceStrength: pF.evidenceStrength, topSignals: pF.signals.filter(s => s.pointsToAI && s.strength >= 30).sort((a,b) => b.strength - a.strength).slice(0,4).map(s => `${s.name}: ${s.strength}%`) };
             engineBContextRef.current = { score: bF.internalScore, evidenceStrength: bF.evidenceStrength, topSignals: bF.signals.filter(s => s.pointsToAI && s.strength >= 30).sort((a,b) => b.strength - a.strength).slice(0,4).map(s => `${s.name}: ${s.strength}%`) };
             setRawPerpResult(pF); setRawBurstResult(bF);
@@ -10151,8 +10156,20 @@ export default function DetectorPage() {
     setTimeout(() => {
       // Engine C always runs via Groq for deep analysis
       runNeuralEngine(sanitised, engineAContextRef.current, engineBContextRef.current)
-        .then(nResult => setNeuralResult(nResult))
-        .catch(e => { console.error(e); setNeuralResult(null); })
+        .then(nResult => {
+          setNeuralResult(nResult);
+          // Cache neural result so re-runs of the same document return identical reports
+          if (_analysisCache && _analysisCache.text === sanitised) {
+            _analysisCache = { ..._analysisCache, neuralResult: nResult };
+          }
+        })
+        .catch(e => {
+          console.error(e);
+          setNeuralResult(null);
+          if (_analysisCache && _analysisCache.text === sanitised) {
+            _analysisCache = { ..._analysisCache, neuralResult: null };
+          }
+        })
         .finally(() => setLoadingN(false));
 
       // Hybrid gate: also call Gemini for ambiguous zone texts
