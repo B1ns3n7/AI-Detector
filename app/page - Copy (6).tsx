@@ -871,16 +871,16 @@ async function generatePDFReport(
     let ai: number, human: number, mixed: number;
     if (s <= 10) {
       ai    = 0;
-      human = Math.round(100 - s * 3); // determinism: round not floor to avoid cliff-edge score jumps
+      human = Math.floor(100 - s * 3);
       mixed = 100 - ai - human;
     } else if (s >= 50) {
       human = 0;
-      ai    = Math.round((s - 50) / 50 * 100); // determinism: round not floor
+      ai    = Math.floor((s - 50) / 50 * 100);
       mixed = 100 - ai - human;
     } else {
       const t = (s - 10) / 40;
-      ai    = Math.round(t * 65); // determinism: round not floor
-      human = Math.round((1 - t) * 65); // determinism: round not floor
+      ai    = Math.floor(t * 65);
+      human = Math.floor((1 - t) * 65);
       mixed = 100 - ai - human;
     }
     ai    = Math.max(0, Math.min(100, ai));
@@ -7477,10 +7477,6 @@ If they disagree (one > 50, one < 30), look for the reason: paraphrased AI? ESL?
     // Strip any accidental markdown fences
     const cleaned = rawText.replace(/```json|```/gi, "").trim();
     parsed = JSON.parse(cleaned);
-    // Attach fallback metadata: different Groq models produce different
-    // scores even at temperature=0 -- the primary source of cross-run variance.
-    parsed._usedFallbackModel = data.used_fallback ?? false;
-    parsed._modelUsed = data.model_used ?? "llama-3.3-70b-versatile";
   } catch (err) {
     console.error("Neural engine API/parse error:", err);
     // GAP 7 FIX: Run the full Engine A per-sentence analysis as the fallback.
@@ -7539,15 +7535,6 @@ If they disagree (one > 50, one < 30), look for the reason: paraphrased AI? ESL?
   const npReliabilityNotes: string[] = parsed.reliability_notes ?? [];
   if (usedSlidingWindow) {
     npReliabilityNotes.unshift(`Sliding-window analysis: document analyzed as head (first ${MAX_WORDS}w) + tail (last ${TAIL_WORDS}w) to detect mixed authorship across essay sections.`);
-  }
-  // Warn when a fallback Groq model was used.
-  // Root cause of cross-run score variance: llama-3.3-70b-versatile vs
-  // llama3-70b-8192 vs mixtral produce different scores even at temp=0.
-  if (parsed._usedFallbackModel) {
-    npReliabilityNotes.unshift(
-      `Fallback LLM used: ${parsed._modelUsed}. Primary model (llama-3.3-70b-versatile) was rate-limited. ` +
-      `Scores may differ from a primary-model run -- re-analyze in a few seconds for a consistent result.`
-    );
   }
   const npHasESL = npReliabilityNotes.some((n: string) => n.toLowerCase().includes("esl") || n.toLowerCase().includes("non-native") || n.toLowerCase().includes("philippine") || n.toLowerCase().includes("filipino"));
   if (npHasESL) {

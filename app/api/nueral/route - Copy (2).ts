@@ -3,17 +3,27 @@ import { NextRequest, NextResponse } from "next/server";
 // ─────────────────────────────────────────────────────────────────────────────
 //  /api/neural  — Hybrid Gate Engine (Gemini 2.5 Flash, free tier)
 //
-//  Called ONLY when Engines A+B produce an ambiguous combined score (30–70%).
-//  Uses Gemini 2.5 Flash to resolve borderline cases.
-//
-//  DETERMINISM FIX (v4.1):
-//    temperature: 0 → greedy decoding. Previously 0.1 which meant the same
-//    text could produce different verdicts across runs, causing the hybrid
-//    gate note to vary and (via reliabilityWarnings) flip engine weights.
+//  This endpoint is called ONLY when Engines A+B produce an ambiguous
+//  combined score (30–70%). It uses Google's free Gemini 2.5 Flash API
+//  to provide a second-opinion LLM judgment, helping to resolve borderline
+//  cases — particularly formal academic writing vs. AI-generated text.
 //
 //  Free tier limits (as of April 2026):
-//    - 500 requests/day · No credit card required
-//    - Key at: https://aistudio.google.com
+//    - 500 requests/day
+//    - No credit card required
+//    - Get key at: https://aistudio.google.com
+//
+//  Environment variable required:
+//    GEMINI_API_KEY=your_key_from_aistudio
+//
+//  Response shape (consumed by runNeuralEngine fallback or hybrid gate):
+//  {
+//    internalScore: number,      // 0-100 AI likelihood
+//    confidence: string,         // low | medium | high
+//    verdict: string,            // Human-Written | Needs Human Review | AI-Generated
+//    reasoning: string,          // one-sentence explanation
+//    signals: string[],          // key signals detected
+//  }
 // ─────────────────────────────────────────────────────────────────────────────
 
 const GEMINI_MODEL = "gemini-2.5-flash";
@@ -33,6 +43,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Text too short" }, { status: 400 });
   }
 
+  // Truncate to keep within token budget (Gemini Flash is generous but be safe)
   const analysisText = text.trim().split(/\s+/).slice(0, 1000).join(" ");
 
   const prompt = `You are an expert AI content detector providing a second-opinion judgment on a borderline text.
@@ -78,11 +89,7 @@ ${analysisText}`;
         body: JSON.stringify({
           contents: [{ parts: [{ text: prompt }] }],
           generationConfig: {
-            // ── Determinism fix ───────────────────────────────────────────
-            // 0.1 → 0: greedy decoding eliminates run-to-run variance.
-            // Gemini honours temperature=0 as argmax selection.
-            temperature: 0,
-            // ─────────────────────────────────────────────────────────────
+            temperature: 0.1,
             maxOutputTokens: 300,
             responseMimeType: "application/json",
           },
@@ -100,14 +107,17 @@ ${analysisText}`;
     }
 
     const data = await response.json();
-    const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+    const rawText =
+      data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
 
+    // Strip any accidental markdown fences
     const clean = rawText.replace(/```json|```/gi, "").trim();
 
     let parsed: any;
     try {
       parsed = JSON.parse(clean);
     } catch {
+      // Gemini sometimes wraps in extra text — try to extract JSON
       const match = clean.match(/\{[\s\S]*\}/);
       if (match) {
         parsed = JSON.parse(match[0]);
