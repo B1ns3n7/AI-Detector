@@ -7747,7 +7747,7 @@ function SentenceHeatmap({ perpResult, burstResult, neuralResult, originalText }
   originalText: string;
 }) {
   if (!perpResult && !burstResult) return null;
-  const [expanded, setExpanded] = React.useState(false);
+  const [expanded, setExpanded] = useState(false);
 
   // Split original text into sentences
   const rawSentences = originalText.match(/[^.!?]+[.!?]+/g) || [originalText];
@@ -7840,7 +7840,7 @@ function SignalContributionChart({ perpResult, burstResult, neuralResult }: {
   neuralResult: EngineResult | null;
 }) {
   if (!perpResult && !burstResult) return null;
-  const [expanded, setExpanded] = React.useState(false);
+  const [expanded, setExpanded] = useState(false);
 
   // Collect all signals from all engines
   type SigEntry = { name: string; strength: number; pointsToAI: boolean; engine: string; engineColor: string };
