@@ -9519,50 +9519,26 @@ export default function DetectorPage() {
   const [urlLoading,     setUrlLoading]     = useState(false);
   const { user, loading: authLoading, error: authError, signInWithGoogle, signInAnon, signOut } = useFirebaseAuth();
 
-  // ── Admin access control (server-side session) ───────────────────────────
+  // ── Admin access control (username/password modal) ──────────────────────
   const [isAdmin,           setIsAdmin]           = useState(false);
   const [showAdminLogin,    setShowAdminLogin]    = useState(false);
   const [adminUser,         setAdminUser]         = useState("");
   const [adminPass,         setAdminPass]         = useState("");
   const [adminLoginError,   setAdminLoginError]   = useState("");
-  const [adminLoginLoading, setAdminLoginLoading] = useState(false);
 
-  // Check existing session on mount
-  useEffect(() => {
-    fetch("/api/admin-login")
-      .then(r => r.json())
-      .then(data => { if (data.isAdmin) setIsAdmin(true); })
-      .catch(() => {});
-  }, []);
-
-  const handleAdminLogin = async () => {
-    setAdminLoginLoading(true);
-    setAdminLoginError("");
-    try {
-      const res = await fetch("/api/admin-login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: adminUser, password: adminPass }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        setIsAdmin(true);
-        setShowAdminLogin(false);
-        setAdminUser("");
-        setAdminPass("");
-        setAdminLoginError("");
-      } else {
-        setAdminLoginError(data.error ?? "Invalid username or password.");
-      }
-    } catch {
-      setAdminLoginError("Could not reach server. Please try again.");
-    } finally {
-      setAdminLoginLoading(false);
+  const handleAdminLogin = () => {
+    if (adminUser === "admin" && adminPass === "ai-detect") {
+      setIsAdmin(true);
+      setShowAdminLogin(false);
+      setAdminUser("");
+      setAdminPass("");
+      setAdminLoginError("");
+    } else {
+      setAdminLoginError("Invalid username or password.");
     }
   };
 
-  const handleAdminLogout = async () => {
-    await fetch("/api/admin-login", { method: "DELETE" });
+  const handleAdminLogout = () => {
     setIsAdmin(false);
     setActiveTab("analyze");
   };
@@ -11066,15 +11042,9 @@ export default function DetectorPage() {
                 </div>
               )}
 
-              <button onClick={handleAdminLogin} disabled={adminLoginLoading}
-                className="w-full py-2.5 bg-slate-900 hover:bg-slate-700 disabled:bg-slate-400 text-white text-sm font-bold rounded-xl transition-colors flex items-center justify-center gap-2">
-                {adminLoginLoading && (
-                  <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
-                  </svg>
-                )}
-                {adminLoginLoading ? "Signing in…" : "Sign In"}
+              <button onClick={handleAdminLogin}
+                className="w-full py-2.5 bg-slate-900 hover:bg-slate-700 text-white text-sm font-bold rounded-xl transition-colors">
+                Sign In
               </button>
             </div>
           </div>
