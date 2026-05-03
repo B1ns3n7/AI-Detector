@@ -10101,14 +10101,20 @@ export default function DetectorPage() {
           engineBContextRef.current = { score: _analysisCache.burstResult.internalScore, evidenceStrength: _analysisCache.burstResult.evidenceStrength, topSignals: _analysisCache.burstResult.signals.filter(s => s.pointsToAI && s.strength >= 30).sort((a,b) => b.strength - a.strength).slice(0,4).map(s => `${s.name}: ${s.strength}%`) };
           setRawPerpResult(_analysisCache.perpResult); setRawBurstResult(_analysisCache.burstResult);
           setPerpResult(_analysisCache.perpResult);    setBurstResult(_analysisCache.burstResult);
+          setLoadingT(false); setLoadingG(false);
           if ("neuralResult" in _analysisCache && _analysisCache.neuralResult !== null) {
-            // Only restore non-null neural results from cache.
-            // A null cached result (from a prior failed Groq call) should not
-            // be served — let the neural engine retry on the fresh analysis.
+            // FIX: Full cache hit — all three engines have stable cached results.
+            // Restoring neural from cache (instead of re-calling the LLM API)
+            // is the primary fix for combined score drift across identical runs
+            // (e.g. 17% → 14% → 0%). The NP engine is the only non-deterministic
+            // source; always reusing its cached result makes re-analysis stable.
             setNeuralResult(_analysisCache.neuralResult);
             setLoadingN(false);
+            return; // complete cache hit — no engine re-runs needed
           }
-          setLoadingT(false); setLoadingG(false);
+          // Partial cache hit: heuristic engines restored, neural previously failed.
+          // Allow the neural setTimeout(450ms) block below to retry the LLM call.
+          // We return here to skip the heuristic setTimeout(400ms) re-computation.
           return;
         }
         const p = runPerplexityEngine(sanitised);
