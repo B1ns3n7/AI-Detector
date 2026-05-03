@@ -7738,100 +7738,6 @@ function LiveWordHighlighter({ text }: { text: string }) {
 
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  XAI — SENTENCE-LEVEL HEATMAP
-// ─────────────────────────────────────────────────────────────────────────────
-function SentenceHeatmap({ perpResult, burstResult, neuralResult, originalText }: {
-  perpResult: EngineResult | null;
-  burstResult: EngineResult | null;
-  neuralResult: EngineResult | null;
-  originalText: string;
-}) {
-  if (!perpResult && !burstResult) return null;
-  const [expanded, setExpanded] = useState(false);
-
-  // Split original text into sentences
-  const rawSentences = originalText.match(/[^.!?]+[.!?]+/g) || [originalText];
-
-  // Build per-sentence AI probability by averaging across available engines
-  const sentenceData = rawSentences.map((sent, i) => {
-    const scores: number[] = [];
-    if (perpResult?.sentences?.[i]) scores.push(perpResult.sentences[i].likelihood ?? 0);
-    if (burstResult?.sentences?.[i]) scores.push(burstResult.sentences[i].likelihood ?? 0);
-    if (neuralResult?.sentences?.[i]) scores.push(neuralResult.sentences[i].likelihood ?? 0);
-    const avg = scores.length > 0 ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : 0;
-    return { text: sent.trim(), aiPct: avg };
-  });
-
-  const getColor = (pct: number) => {
-    if (pct >= 70) return { bg: "#fef2f2", border: "#fca5a5", text: "#991b1b", badge: "#ef4444", label: "High AI" };
-    if (pct >= 40) return { bg: "#fffbeb", border: "#fcd34d", text: "#92400e", badge: "#f59e0b", label: "Mixed" };
-    return { bg: "#f0fdf4", border: "#86efac", text: "#166534", badge: "#22c55e", label: "Human" };
-  };
-
-  const highCount  = sentenceData.filter(s => s.aiPct >= 70).length;
-  const mixedCount = sentenceData.filter(s => s.aiPct >= 40 && s.aiPct < 70).length;
-  const humanCount = sentenceData.filter(s => s.aiPct < 40).length;
-  const visible    = expanded ? sentenceData : sentenceData.slice(0, 5);
-
-  return (
-    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-      <button onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center justify-between px-5 py-3.5 hover:bg-slate-50 transition-colors">
-        <span className="flex items-center gap-2.5">
-          <span className="text-base">🌡️</span>
-          <span className="text-sm font-semibold text-slate-700">Sentence-Level Heatmap</span>
-          <span className="text-[10px] text-slate-400">AI probability per sentence</span>
-        </span>
-        <div className="flex items-center gap-2">
-          <span className="px-2 py-0.5 rounded-full bg-red-100 text-red-700 text-[10px] font-bold">{highCount} AI</span>
-          <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 text-[10px] font-bold">{mixedCount} Mixed</span>
-          <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 text-[10px] font-bold">{humanCount} Human</span>
-          <svg className={`w-4 h-4 text-slate-400 transition-transform ${expanded ? "rotate-180" : ""}`} viewBox="0 0 20 20" fill="currentColor">
-            <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd"/>
-          </svg>
-        </div>
-      </button>
-      <div className="border-t border-slate-100 px-5 py-4 space-y-2">
-        {visible.map((s, i) => {
-          const c = getColor(s.aiPct);
-          return (
-            <div key={i} className="flex gap-3 items-start rounded-xl p-2.5 border"
-              style={{ background: c.bg, borderColor: c.border }}>
-              {/* Probability bar on the left */}
-              <div className="flex-shrink-0 flex flex-col items-center gap-1 w-10">
-                <span className="text-[10px] font-black" style={{ color: c.badge }}>{s.aiPct}%</span>
-                <div className="w-2 rounded-full overflow-hidden bg-slate-200" style={{ height: "40px" }}>
-                  <div className="w-full rounded-full transition-all" style={{ height: `${s.aiPct}%`, background: c.badge, marginTop: `${100 - s.aiPct}%` }} />
-                </div>
-              </div>
-              {/* Sentence text */}
-              <div className="flex-1 min-w-0">
-                <p className="text-xs leading-relaxed" style={{ color: c.text }}>{s.text}</p>
-              </div>
-              {/* Label badge */}
-              <span className="flex-shrink-0 text-[9px] font-bold px-1.5 py-0.5 rounded-full text-white" style={{ background: c.badge }}>
-                {c.label}
-              </span>
-            </div>
-          );
-        })}
-        {sentenceData.length > 5 && (
-          <button onClick={() => setExpanded(!expanded)}
-            className="w-full text-xs text-slate-500 hover:text-slate-800 font-semibold py-1.5 transition-colors">
-            {expanded ? "Show less ▲" : `Show ${sentenceData.length - 5} more sentences ▼`}
-          </button>
-        )}
-      </div>
-      <div className="px-5 py-2.5 bg-slate-50 border-t border-slate-100 flex items-center gap-4 text-[10px] text-slate-500">
-        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-400 inline-block"/>≥70% = High AI</span>
-        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-400 inline-block"/>40–69% = Mixed</span>
-        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-400 inline-block"/>&lt;40% = Human</span>
-      </div>
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 //  XAI — SIGNAL CONTRIBUTION CHART
 // ─────────────────────────────────────────────────────────────────────────────
 function SignalContributionChart({ perpResult, burstResult, neuralResult }: {
@@ -11166,16 +11072,6 @@ export default function DetectorPage() {
                 originalText={inputText}
               />
             </div>
-
-            {/* ── XAI: Sentence Heatmap ─────────────────────────────── */}
-            {(perpResult || burstResult) && (
-              <SentenceHeatmap
-                perpResult={perpResult}
-                burstResult={burstResult}
-                neuralResult={neuralResult}
-                originalText={inputText}
-              />
-            )}
 
             {/* ── XAI: Signal Contribution Chart ────────────────────────── */}
             {(perpResult || burstResult) && (
