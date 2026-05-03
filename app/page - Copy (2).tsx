@@ -920,11 +920,8 @@ async function generatePDFReport(
     const bBD = pdfBreakdown(burstResult.internalScore, pdfElevRatio(burstResult));
     const nBD = neuralResult ? pdfBreakdown(neuralResult.internalScore, pdfElevRatio(neuralResult)) : null;
     const engineCount = nBD ? 3 : 2;
-    // Weighted ensemble: PS=1.2, BC=1.0, NP=1.3 (neural gets edge for PDF export too)
-    const wPS1 = 1.2, wBC1 = 1.0, wNP1 = nBD ? 1.3 : 0;
-    const totalW1 = wPS1 + wBC1 + wNP1;
-    const avgAI    = Math.round((pBD.ai    * wPS1 + bBD.ai    * wBC1 + (nBD?.ai    ?? 0) * wNP1) / totalW1);
-    const avgMixed = Math.round((pBD.mixed * wPS1 + bBD.mixed * wBC1 + (nBD?.mixed  ?? 0) * wNP1) / totalW1);
+    const avgAI    = Math.round((pBD.ai    + bBD.ai    + (nBD?.ai    ?? 0)) / engineCount);
+    const avgMixed = Math.round((pBD.mixed + bBD.mixed + (nBD?.mixed  ?? 0)) / engineCount);
     const avgHuman = 100 - avgAI - avgMixed;
     const combLabel = (() => {
       // FPR FIX: require both heuristic engines to lean AI before labelling AI-Generated.
@@ -1366,10 +1363,8 @@ async function generatePDFReport(
     const bBD2  = pdfBreakdown(burstResult.internalScore, burstResult.sentences.length > 0 ? burstResult.sentences.filter(s => s.label === "elevated").length / burstResult.sentences.length : 0);
     const nBD2  = neuralResult ? pdfBreakdown(neuralResult.internalScore, neuralResult.sentences.length > 0 ? neuralResult.sentences.filter(s => s.label === "elevated").length / neuralResult.sentences.length : 0) : null;
     const engineCountComp = nBD2 ? 3 : 2;
-    const wPS2 = 1.2, wBC2 = 1.0, wNP2 = nBD2 ? 1.3 : 0;
-    const totalW2 = wPS2 + wBC2 + wNP2;
-    const avgAIComp    = Math.round((pBD2.ai    * wPS2 + bBD2.ai    * wBC2 + (nBD2?.ai    ?? 0) * wNP2) / totalW2);
-    const avgHumanComp = Math.round((pBD2.human * wPS2 + bBD2.human * wBC2 + (nBD2?.human ?? 0) * wNP2) / totalW2);
+    const avgAIComp    = Math.round((pBD2.ai    + bBD2.ai    + (nBD2?.ai    ?? 0)) / engineCountComp);
+    const avgHumanComp = Math.round((pBD2.human + bBD2.human + (nBD2?.human ?? 0)) / engineCountComp);
     const avgMixedComp = 100 - avgAIComp - avgHumanComp;
     const pVerdict = pBD2.ai >= pBD2.mixed && pBD2.ai >= pBD2.human ? "AI" : pBD2.human >= pBD2.mixed ? "Human" : "Mixed";
     const bVerdict = bBD2.ai >= bBD2.mixed && bBD2.ai >= bBD2.human ? "AI"  : bBD2.human >= bBD2.mixed ? "Human" : "Mixed";
@@ -1495,10 +1490,8 @@ async function generatePDFReport(
       const bBDJ = pdfBreakdown(burstResult.internalScore, burstResult.sentences.length > 0 ? burstResult.sentences.filter(s => s.label === "elevated").length / burstResult.sentences.length : 0);
       const nBDJ = neuralResult ? pdfBreakdown(neuralResult.internalScore, neuralResult.sentences.length > 0 ? neuralResult.sentences.filter(s => s.label === "elevated").length / neuralResult.sentences.length : 0) : null;
       const engCount = nBDJ ? 3 : 2;
-      const wPSJ = 1.2, wBCJ = 1.0, wNPJ = nBDJ ? 1.3 : 0;
-      const totalWJ = wPSJ + wBCJ + wNPJ;
-      const avgAIJ    = Math.round((pBDJ.ai    * wPSJ + bBDJ.ai    * wBCJ + (nBDJ?.ai    ?? 0) * wNPJ) / totalWJ);
-      const avgHumanJ = Math.round((pBDJ.human * wPSJ + bBDJ.human * wBCJ + (nBDJ?.human ?? 0) * wNPJ) / totalWJ);
+      const avgAIJ    = Math.round((pBDJ.ai    + bBDJ.ai    + (nBDJ?.ai    ?? 0)) / engCount);
+      const avgHumanJ = Math.round((pBDJ.human + bBDJ.human + (nBDJ?.human ?? 0)) / engCount);
       const avgMixedJ = 100 - avgAIJ - avgHumanJ;
       const autoVerdict = (() => {
         const pLeanAI2 = pBDJ.ai > pBDJ.human;
@@ -8660,9 +8653,7 @@ function ShareMenu({ perpResult, burstResult, neuralResult, onClose }: {
     const bBd = uiDeriveBreakdown(burstResult.internalScore);
     const nBd = neuralResult ? uiDeriveBreakdown(neuralResult.internalScore) : null;
     const n = nBd ? 3 : 2;
-    const wPSM = 1.2, wBCM = 1.0, wNPM = nBd ? 1.3 : 0;
-    const totalWM = wPSM + wBCM + wNPM;
-    const avgAI = Math.round((pBd.ai * wPSM + bBd.ai * wBCM + (nBd?.ai ?? 0) * wNPM) / totalWM);
+    const avgAI = Math.round((pBd.ai + bBd.ai + (nBd?.ai ?? 0)) / n);
     const tier = getTier(avgAI);
     return `AI Detection Result: ${tier.label} (${avgAI}% AI score)\n` +
       `Engine 1 – Perplexity & Stylometry: ${pBd.ai}% AI (${perpResult.evidenceStrength})\n` +
@@ -10349,26 +10340,7 @@ export default function DetectorPage() {
                             </span>
                           )}
                         </div>
-                        <p className="text-sm text-slate-500 mb-1">Combined result from {neuralResult ? 3 : 2} detection engines</p>
-                        {/* Ensemble weight badges */}
-                        <div className="flex items-center justify-center gap-1.5 mb-3 flex-wrap">
-                          <span className="text-[10px] text-slate-400 mr-0.5">Weights:</span>
-                          <span className="px-2 py-0.5 rounded-full bg-violet-50 border border-violet-200 text-[10px] font-semibold text-violet-700">
-                            PS ×{perpResult && burstResult
-                              ? (perpResult.wordCount < 200 ? "0.8" : "1.2")
-                              : "1.2"}
-                          </span>
-                          <span className="px-2 py-0.5 rounded-full bg-blue-50 border border-blue-200 text-[10px] font-semibold text-blue-700">
-                            BC ×{perpResult && burstResult
-                              ? (perpResult.wordCount < 200 ? "0.8" : "1.0")
-                              : "1.0"}
-                          </span>
-                          {neuralResult && (
-                            <span className="px-2 py-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-[10px] font-semibold text-emerald-700">
-                              NP ×{perpResult && perpResult.wordCount < 200 ? "1.4" : "1.3"}
-                            </span>
-                          )}
-                        </div>
+                        <p className="text-sm text-slate-500 mb-3">Combined result from {neuralResult ? 3 : 2} detection engines</p>
 
                         <BreakdownBar ai={combined.avgAI} mixed={combined.avgMixed} human={combined.avgHuman} height={10} />
                         <div className="flex justify-between text-xs font-bold mt-1.5">
