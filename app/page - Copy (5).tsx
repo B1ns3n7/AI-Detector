@@ -1664,8 +1664,6 @@ interface EngineResult {
   agreesWithOther?: boolean;
   // Whether text has features that reduce reliability
   reliabilityWarnings: string[];
-  // Hybrid gate (Gemini) second-opinion note — display-only, NOT used in weight detection
-  hybridGateNote?: string;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -4738,9 +4736,9 @@ function ratePerThousandWords(hitCount: number, wordCount: number): number {
 }
 
 // Model version metadata (Improvement #20)
-const MODEL_VERSION = "MultiLens v4.1";
-const MODEL_DATE    = "May 2026";
-const MODEL_SIGNALS = "47 signals · 3 engines · Deterministic · Platt-calibrated · Genre-adaptive";
+const MODEL_VERSION = "MultiLens v4.0";
+const MODEL_DATE    = "June 2025";
+const MODEL_SIGNALS = "47 signals · 3 engines · Platt-calibrated · Genre-adaptive";
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  IMPROVEMENT #10 — MEMOIZATION CACHE
@@ -6830,14 +6828,6 @@ function EnginePanel({
               );
             })()}
 
-            {/* Hybrid gate (Gemini) second-opinion note — display-only */}
-            {(result as any).hybridGateNote && (
-              <div className="bg-violet-50 border border-violet-200 rounded-xl px-3 py-2 space-y-0.5">
-                <p className="text-[10px] font-bold text-violet-700 uppercase tracking-wide">◈ Hybrid Gate (Gemini 2.5)</p>
-                <p className="text-[10px] text-violet-700 leading-snug">{(result as any).hybridGateNote}</p>
-              </div>
-            )}
-
             <div className="grid grid-cols-2 gap-1.5 text-center">
               {[
                 { label: "Words",     value: result.wordCount },
@@ -7440,7 +7430,6 @@ If they disagree (one > 50, one < 30), look for the reason: paraphrased AI? ESL?
       body: JSON.stringify({
         model: "claude-sonnet-4-20250514",
         max_tokens: 4000,
-        temperature: 0,   // ← determinism fix: same text always yields same score
         system: SYSTEM_PROMPT,
         messages: [{ role: "user", content: USER_PROMPT }],
       }),
@@ -8462,15 +8451,13 @@ function recordReviewerFeedback(systemVerdict: string, reviewerVerdict: string, 
 function uiDeriveBreakdown(score: number, elevatedRatio = 0): { ai: number; mixed: number; human: number } {
   const s = Math.max(0, Math.min(100, score));
   let ai: number, human: number, mixed: number;
-  // Use Math.round (not Math.floor) to avoid cliff-edge rounding artifacts where
-  // a 0.5-point score shift causes a 1-point floor jump, cascading into the weighted average.
   if (s <= 10) {
-    ai = 0; human = Math.round(100 - s * 3); mixed = 100 - ai - human;
+    ai = 0; human = Math.floor(100 - s * 3); mixed = 100 - ai - human;
   } else if (s >= 50) {
-    human = 0; ai = Math.round((s - 50) / 50 * 100); mixed = 100 - ai - human;
+    human = 0; ai = Math.floor((s - 50) / 50 * 100); mixed = 100 - ai - human;
   } else {
     const t = (s - 10) / 40;
-    ai = Math.round(t * 65); human = Math.round((1 - t) * 65); mixed = 100 - ai - human;
+    ai = Math.floor(t * 65); human = Math.floor((1 - t) * 65); mixed = 100 - ai - human;
   }
   ai    = Math.max(0, Math.min(100, ai));
   human = Math.max(0, Math.min(100, human));
@@ -10036,9 +10023,9 @@ export default function DetectorPage() {
     if (!raw) return null;
     const cal = loadCalibrationLocal();
     const shift = getBayesianThresholdShift(raw.avgAI, cal);
-    if (shift === 0) return { ...raw, calibrationShift: 0 };
+    if (shift === 0) return raw;
     const adjusted = Math.max(0, Math.min(100, raw.avgAI + shift));
-    return { ...raw, avgAI: adjusted, tier: getTier(adjusted), calibrationShift: shift };
+    return { ...raw, avgAI: adjusted, tier: getTier(adjusted) };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [perpResult, burstResult, neuralResult]);
 
@@ -10101,10 +10088,7 @@ export default function DetectorPage() {
           engineBContextRef.current = { score: _analysisCache.burstResult.internalScore, evidenceStrength: _analysisCache.burstResult.evidenceStrength, topSignals: _analysisCache.burstResult.signals.filter(s => s.pointsToAI && s.strength >= 30).sort((a,b) => b.strength - a.strength).slice(0,4).map(s => `${s.name}: ${s.strength}%`) };
           setRawPerpResult(_analysisCache.perpResult); setRawBurstResult(_analysisCache.burstResult);
           setPerpResult(_analysisCache.perpResult);    setBurstResult(_analysisCache.burstResult);
-          if ("neuralResult" in _analysisCache && _analysisCache.neuralResult !== null) {
-            // Only restore non-null neural results from cache.
-            // A null cached result (from a prior failed Groq call) should not
-            // be served — let the neural engine retry on the fresh analysis.
+          if ("neuralResult" in _analysisCache) {
             setNeuralResult(_analysisCache.neuralResult);
             setLoadingN(false);
           }
@@ -10209,16 +10193,14 @@ export default function DetectorPage() {
           .then(r => r.ok ? r.json() : null)
           .then(hybridData => {
             if (!hybridData || hybridData.error) return;
-            // Store hybrid gate result in a dedicated field — NOT in reliabilityWarnings.
-            // reliabilityWarnings feeds isAcademicText / isCreativeText weight detection,
-            // so injecting a Gemini note here could flip engine weights between runs
-            // (non-determinism source #2). The hybridGateNote field is display-only.
+            // Surface hybrid gate result as a reliability note on the neural result
+            // (we don't replace the full neural result — just annotate it)
             setNeuralResult(prev => {
               if (!prev) return prev;
               const hybridNote = `Hybrid gate (Gemini 2.5 Flash): ${hybridData.verdict} — ${hybridData.reasoning} [confidence: ${hybridData.confidence}]`;
               return {
                 ...prev,
-                hybridGateNote: hybridNote,
+                reliabilityWarnings: [hybridNote, ...prev.reliabilityWarnings],
               };
             });
           })
@@ -10633,17 +10615,7 @@ export default function DetectorPage() {
                             </span>
                           )}
                         </div>
-                        <p className="text-sm text-slate-500 mb-1">Combined result from {neuralResult ? 3 : 2} detection engines
-                          {combined.calibrationShift !== 0 && (
-                            <span
-                              className="ml-2 text-[10px] font-semibold px-1.5 py-0.5 rounded-full border"
-                              style={{ color: "#2563eb", background: "#eff6ff", borderColor: "#bfdbfe" }}
-                              title={`Your reviewer history shifted this score ${combined.calibrationShift > 0 ? "+" : ""}${combined.calibrationShift} pts. Calibration can be reset in the Admin panel.`}
-                            >
-                              ⚡ calibrated {combined.calibrationShift > 0 ? "+" : ""}{combined.calibrationShift} pts
-                            </span>
-                          )}
-                        </p>
+                        <p className="text-sm text-slate-500 mb-1">Combined result from {neuralResult ? 3 : 2} detection engines</p>
                         {/* Ensemble weight badges */}
                         <div className="flex items-center justify-center gap-1.5 mb-3 flex-wrap">
                           <span className="text-[10px] text-slate-400 mr-0.5">Weights:</span>
@@ -10669,29 +10641,6 @@ export default function DetectorPage() {
                           <span style={{ color: "#ef4444" }}>AI {combined.avgAI}%</span>
                           <span style={{ color: "#f59e0b" }}>Mixed {combined.avgMixed}%</span>
                           <span style={{ color: "#22c55e" }}>Human {combined.avgHuman}%</span>
-                        </div>
-
-                        {/* Score stability indicator — shows determinism status */}
-                        <div className="mt-2 flex items-center gap-1.5 flex-wrap">
-                          <span
-                            className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full border"
-                            style={{ color: "#15803d", background: "#f0fdf4", borderColor: "#bbf7d0" }}
-                            title="Heuristic engines (PS, BC) are fully deterministic. Neural engine uses temperature=0 for reproducible results."
-                          >
-                            <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                            </svg>
-                            Deterministic scoring
-                          </span>
-                          {!neuralResult && !loadingN && (
-                            <span
-                              className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full border"
-                              style={{ color: "#b45309", background: "#fffbeb", borderColor: "#fcd34d" }}
-                              title="Neural engine unavailable — result based on 2 engines only. Score may be less precise."
-                            >
-                              ⚠ 2-engine mode
-                            </span>
-                          )}
                         </div>
 
                         {banner && (
@@ -11314,7 +11263,7 @@ export default function DetectorPage() {
                   {[
                     { badge: "PS", bg: "#1b3a6b", label: "Perplexity & Stylometry", text: "47 signals across 8 tiers: lexical (vocab density, transitions, bigrams); structural (paragraph openers, conclusion clustering); stylistic (hedging, clause stacking, passive voice); surface (TTR, MTLD, nominalization); semantic (self-similarity, tone flatness, vague citations, discourse schema); enhancement (hapax legomena, Flesch-Kincaid readability fingerprinting, function word profile, Self-BLEU n-gram repetition, semantic density uniformity, capitalization abuse, AI model family fingerprinting, paraphrase attack detection); batch-2 (Zipf's Law deviation, TTR power-law trajectory, KS normality test, anaphora resolution density, argument structure analysis, section-differential scoring, long-document chunk analysis). Human reductions: direct quotes, Filipino/ESL L1-transfer, temporal/spatial grounding. Genre-adaptive weighting. Confidence-based abstention." },
                     { badge: "BC", bg: "#16a34a", label: "Burstiness & Cognitive", text: "8 signals: sentence-length CV (burstiness), short-sentence absence, rhetorical variation, contractions, personal anecdote, numeric specificity. Personal anecdotes and precise numbers reduce AI score (human markers). CV < 0.22 = uniform AI rhythm; CV > 0.42 = natural human variation." },
-                    { badge: "NP", bg: "#7c3aed", label: "Neural Perplexity", text: "LLM-based analysis using Binoculars-style reasoning: token predictability, semantic smoothness, structural uniformity, DetectGPT-style perturbation resistance, bimodal sentence distribution detection (mixed authorship). Calibrated for ESL and Philippine academic context. Runs at temperature=0 for deterministic, reproducible results — the same text always produces the same score. Confidence-based abstention: when all engines return INCONCLUSIVE with high inter-engine disagreement (>40 point spread), no verdict is issued rather than averaging uncertain signals." },
+                    { badge: "NP", bg: "#7c3aed", label: "Neural Perplexity", text: "LLM-based analysis using Binoculars-style reasoning: token predictability, semantic smoothness, structural uniformity, DetectGPT-style perturbation resistance, bimodal sentence distribution detection (mixed authorship). Calibrated for ESL and Philippine academic context. Confidence-based abstention: when all engines return INCONCLUSIVE with high inter-engine disagreement (>40 point spread), no verdict is issued rather than averaging uncertain signals." },
                   ].map(({ badge, bg, label, text }) => (
                     <div key={badge}>
                       <p className="font-bold text-slate-700 mb-1.5 flex items-center gap-1.5">
