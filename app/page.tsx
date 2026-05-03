@@ -3567,17 +3567,22 @@ function getReliabilityWarnings(text: string, wc: number, sentences: string[]): 
   // At 12+ hits the density is unambiguously AI-level even with the expanded list.
   const eslVocabWords  = (text.toLowerCase().match(/\b[a-z]+\b/g) || []);
   const eslAiVocabHits = eslVocabWords.filter(w => AI_VOCAB.has(w)).length;
-  if (eslAiVocabHits >= 12) {
-    // Hard block: 12+ hits is unambiguously AI-level vocab density — skip ESL flag.
+  if (eslAiVocabHits >= 8) {
+    // FIX: Hard block lowered from 12 → 8 hits.
+    // The threshold was raised to 12 to account for expanded vocab set, but this
+    // allowed LLM texts with 8–11 clear AI vocab hits to still trigger the ESL
+    // collapse (95%→70% blend of only structural signals), zeroing their score.
+    // At 8+ hits the vocab density is unambiguously AI-level even with common
+    // academic words in the list — genuine ESL writers rarely exceed 5–6 hits.
     return warnings;
   }
 
-  // GATE 1b: Moderate vocab (7–11 hits) — apply burstiness cross-check before blocking.
+  // GATE 1b: Moderate vocab (5–7 hits) — apply burstiness cross-check before blocking.
   // ESL writers in this range often have moderate formal vocab that happens to be in
   // the expanded AI list. The discriminating signal at this vocab level is burstiness:
-  //   - AI-generated text with 7–11 vocab hits still has very low CV (< 0.32)
-  //   - ESL writers with 7–11 vocab hits keep more natural sentence variation (CV >= 0.20)
-  if (eslAiVocabHits >= 7) {
+  //   - AI-generated text with 5–7 vocab hits still has low CV (< 0.30)
+  //   - ESL writers with 5–7 vocab hits keep more natural sentence variation (CV >= 0.30)
+  if (eslAiVocabHits >= 5) {
     // Compute sentence length CV for the burstiness cross-check
     const eslSentLens = sentences.map(s => s.trim().split(/\s+/).length);
     const eslAvgLenCV = eslSentLens.length > 0 ? eslSentLens.reduce((a, b) => a + b, 0) / eslSentLens.length : 10;
@@ -3589,13 +3594,13 @@ function getReliabilityWarnings(text: string, wc: number, sentences: string[]): 
     const luxuryInText = (text.match(/\b(synergistic|transformative|holistic|proactive|scalable|actionable|pivotal|foundational|it is worth noting|it is important to note|cannot be (?:overstated|understated)|plays a (?:crucial|pivotal|vital) role|leverage[sd]?|streamline[sd]?|optimize[sd]?|paradigm shift|ecosystem|stakeholder)\b/gi) || []).length;
 
     if (
-      luxuryInText >= 2 ||   // 2+ luxury buzzwords → AI, not ESL
-      eslCV < 0.20            // very low burstiness → metronomic AI rhythm even at moderate vocab
+      luxuryInText >= 1 ||   // FIX: 1+ luxury buzzword → AI (was 2; ESL writers use 0)
+      eslCV < 0.30            // FIX: raised from 0.20 → 0.30; LLM texts CV typically 0.13–0.28
     ) {
       // Signals consistent with AI-generated text at this vocab level — skip ESL flag
       return warnings;
     }
-    // Otherwise fall through: moderate vocab + human-ish CV + no luxury terms → allow ESL check
+    // Otherwise fall through: moderate vocab + natural CV + no luxury terms → allow ESL check
   }
 
   // GATE 2: AI-specific luxury vocabulary — second line of defence for texts that
@@ -4716,13 +4721,21 @@ function computeDisagreementIndex(scores: number[]): { index: number; label: str
 
 function plattCalibrateScore(rawScore: number): number {
   // Sigmoid: P(AI) = 1 / (1 + exp(-k*(x - x0)))
-  // Parameters calibrated so:
-  //   rawScore=20 → ~20% AI probability (borderline human)
-  //   rawScore=40 → ~40% AI probability (ambiguous)
-  //   rawScore=60 → ~70% AI probability (likely AI)
-  //   rawScore=80 → ~90% AI probability (high confidence AI)
-  const k  = 0.07;   // steepness
-  const x0 = 48;     // midpoint (inflection)
+  // FIX: Original parameters (k=0.07, x0=48) had the inflection point at the
+  // AI/human boundary, which aggressively pulled all sub-48 scores toward 0.
+  // Combined with the uiDeriveBreakdown cliff this caused LLM texts scoring
+  // 35–65 internally to display as 0% AI in the UI.
+  //
+  // New parameters: x0=42 (center on ambiguous zone, not the AI threshold),
+  // k=0.065 (slightly gentler slope to preserve signal in the 25–55 range).
+  // Calibration:
+  //   rawScore=15 → ~20% (borderline human — was ~9%, too low)
+  //   rawScore=30 → ~35% (ambiguous — was ~22%, suppressed genuine AI)
+  //   rawScore=42 → ~50% (midpoint)
+  //   rawScore=55 → ~65% (likely AI — was ~62%, similar)
+  //   rawScore=80 → ~90% (high confidence AI — unchanged)
+  const k  = 0.065;  // steepness (was 0.07)
+  const x0 = 42;     // midpoint — shifted from 48 to 40 (was 48)
   const calibrated = 100 / (1 + Math.exp(-k * (rawScore - x0)));
   return Math.round(Math.min(99, Math.max(1, calibrated)));
 }
@@ -5306,8 +5319,11 @@ function runPerplexityEngine(text: string): EngineResult {
     const eslSafeMax = 25 * W_TIER_B + 20 * W_TIER_C + 20 * W_TIER_C
       + 30 * W_TIER_B + 22 * W_TIER_B;  // max contributions of those signals
     const eslSafeNorm = Math.min(100, (eslSafeRaw / Math.max(eslSafeMax, 1)) * 100);
-    // Blend: 95% weight on ESL-safe signals, 5% on full score
-    norm = eslSafeNorm * 0.95 + norm * 0.05;
+    // FIX: Was 95/5 blend — too aggressive, collapsed genuine AI scores to near 0.
+    // ESL-safe structural signals still dominate (70%) to protect human ESL writers,
+    // but the full signal set retains 30% weight so strong AI vocab/transition
+    // patterns (which ESL writers genuinely don't produce) are not entirely discarded.
+    norm = eslSafeNorm * 0.70 + norm * 0.30;
   }
 
   // Improvement 5: differentiated warning penalties — only suppress signals correlated with each warning type
@@ -8462,16 +8478,41 @@ function recordReviewerFeedback(systemVerdict: string, reviewerVerdict: string, 
 function uiDeriveBreakdown(score: number, elevatedRatio = 0): { ai: number; mixed: number; human: number } {
   const s = Math.max(0, Math.min(100, score));
   let ai: number, human: number, mixed: number;
-  // Use Math.round (not Math.floor) to avoid cliff-edge rounding artifacts where
-  // a 0.5-point score shift causes a 1-point floor jump, cascading into the weighted average.
-  if (s <= 10) {
-    ai = 0; human = Math.round(100 - s * 3); mixed = 100 - ai - human;
-  } else if (s >= 50) {
-    human = 0; ai = Math.round((s - 50) / 50 * 100); mixed = 100 - ai - human;
+
+  // FIX: The original 3-branch formula had a severe discontinuity cliff at s=50:
+  //   s=49 -> ai=63%  (s<50 branch: t=0.975, ai=round(0.975*65)=63)
+  //   s=50 -> ai=0%   (s>=50 branch: ai=round((50-50)/50*100)=0)  ← CLIFF
+  //   s=55 -> ai=10%  (s>=50 branch: ai=round((55-50)/50*100)=10)
+  // This meant any LLM text scoring 50–70 internally showed 0–34% AI in the UI,
+  // making strong AI signals appear as "Mostly Human" or "Needs Human Review".
+  //
+  // NEW: single smooth linear mapping across the full 0–100 range:
+  //   s=0   -> ai=0%,   human=100%, mixed=0%
+  //   s=20  -> ai=0%,   human=75%,  mixed=25%   (clear human zone)
+  //   s=35  -> ai=15%,  human=45%,  mixed=40%   (ambiguous zone starts)
+  //   s=50  -> ai=35%,  human=15%,  mixed=50%   (midpoint — now clearly Mixed)
+  //   s=65  -> ai=60%,  human=0%,   mixed=40%   (Likely AI zone)
+  //   s=80  -> ai=80%,  human=0%,   mixed=20%
+  //   s=100 -> ai=100%, human=0%,   mixed=0%
+  if (s <= 20) {
+    // Clear human zone: ai stays 0, human fades from 100→75
+    ai = 0;
+    human = Math.round(100 - s * 1.25);
+    mixed = 100 - ai - human;
+  } else if (s <= 50) {
+    // Ambiguous zone: ai rises 0→35%, human falls 75→15%
+    const t = (s - 20) / 30;
+    ai    = Math.round(t * 35);
+    human = Math.round(75 - t * 60);
+    mixed = 100 - ai - human;
   } else {
-    const t = (s - 10) / 40;
-    ai = Math.round(t * 65); human = Math.round((1 - t) * 65); mixed = 100 - ai - human;
+    // AI zone: ai rises 35→100%, mixed fades out, human=0
+    const t = (s - 50) / 50;
+    ai    = Math.round(35 + t * 65);
+    human = 0;
+    mixed = 100 - ai - human;
   }
+
   ai    = Math.max(0, Math.min(100, ai));
   human = Math.max(0, Math.min(100, human));
   mixed = Math.max(0, 100 - ai - human);
@@ -10009,7 +10050,11 @@ export default function DetectorPage() {
     const enginesAgreeAI = pIsAI && bIsAI; // Both must agree for a positive verdict
     let finalAvgAI = avgAI;
     let consensusNote: string | null = null;
-    if (avgAI >= 50 && !enginesAgreeAI) {
+    if (avgAI >= 60 && !enginesAgreeAI) {
+      // FIX: Raised threshold from 50 → 60.
+      // At avgAI 50–59 with moderate AI signals from both engines, capping at 49
+      // was converting legitimate Mixed/Uncertain verdicts into Needs Human Review.
+      // Only clamp when one engine strongly fires AI (>=60) while the other disagrees.
       // One engine over-fired. Clamp to review zone.
       finalAvgAI = Math.min(avgAI, 49);
       consensusNote = "Engines disagree — result requires human review before any conclusion";
