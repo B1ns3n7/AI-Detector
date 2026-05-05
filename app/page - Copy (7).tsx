@@ -10,20 +10,6 @@ import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 //  4. Experiment Tracking Panel (history of batch evaluations)
 //  5. SHAP-like Signal Contribution Viewer (feature attribution deltas)
 //  6. Real-time Monitoring Dashboard (in-session volume tracking + drift)
-//
-//  PERFORMANCE UPDATE — 2026-05 (Phase 2 ROC analysis)
-//  7. Threshold change: rocThreshold default 15 → 35 (ROC-optimal operating point)
-//     Per Phase 2 testing (MultiLens_Phase2_Testing.xlsx, Sheet 5):
-//       t=35 → TPR 62.5%, FPR 0.111  (was: t=50 → TPR 25%, FPR 0.000)
-//       FPR on Corpus A (Filipino/ESL human) remains 0 at t=35 — primary claim holds.
-//       Projected accuracy improvement: 64.7% → ~76.5%
-//  8. ExperimentRun schema v2: added `threshold` + `signalVersion` fields so
-//     Experiment Tracking Panel can correctly label and compare historical runs.
-//  9. Batch results table: three-zone verdict display (Human / Needs Review / AI-Generated)
-//     aligned with the new threshold logic.
-// 10. Word-count reliability badge: texts under 150 words flagged with ⚠ in
-//     batch results table — TTR, hapax, and moving-window signals inactive below
-//     this length. Score is less reliable; reviewer should treat as indicative only.
 // ═══════════════════════════════════════════════════════════════════════════════
 //---------------------------------------
 // ── Dataset & Evaluation Types ───────────────────────────────────────────────
@@ -53,11 +39,6 @@ interface ExperimentRun {
   name: string;
   rowCount: number;
   hasGroundTruth: boolean;
-  // ── v2 schema additions: persist threshold + signal version so historical
-  //    runs remain comparable even after config changes. Both fields are
-  //    optional for backward-compat with v1 records already in Firestore.
-  threshold?: number;        // detection threshold used for this run (default 35 from v2)
-  signalVersion?: string;    // signal set version label (e.g. "v1", "v2")
   // Aggregate metrics
   avgAI: number;
   aiCount: number;
@@ -3685,124 +3666,14 @@ function getReliabilityWarnings(text: string, wc: number, sentences: string[]): 
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  PRIORITY 1 — ESL FLUENCY STRATIFICATION
-//  Phase 1 analysis finding: the ESL gate only protected writers with OBVIOUS
-//  surface-level ESL markers (missing articles, L1-transfer syntax). High-fluency
-//  Filipino/ESL writers who write grammatically correct English received no gate
-//  protection, exposing them to the full AI classifier.
-//
-//  This module estimates ESL fluency level (Beginner/Intermediate/Advanced/Near-native)
-//  and adjusts gate activation accordingly:
-//    Beginner/Intermediate → gate activates on explicit L1-transfer markers (existing)
-//    Advanced → gate activates on discourse-level signals (topic-comment, hedging style)
-//    Near-native → gate activates on deeper signals (semantic density, named entity specificity)
-//
-//  Returns: { level, confidence, discourseMarkers, deepSignals, protectionMultiplier }
-//  protectionMultiplier: 1.0 = full ESL penalty; 0.6 = reduced (near-native, less certain)
-// ─────────────────────────────────────────────────────────────────────────────
-
-type ESLFluencyLevel = "beginner" | "intermediate" | "advanced" | "near-native" | "native";
-
-function detectESLFluencyLevel(text: string, wc: number, sentences: string[]): {
-  level: ESLFluencyLevel;
-  confidence: "high" | "medium" | "low";
-  discourseMarkers: number;
-  deepSignals: string[];
-  protectionMultiplier: number;
-  details: string;
-} {
-  if (wc < 80) return { level: "native", confidence: "low", discourseMarkers: 0, deepSignals: [], protectionMultiplier: 0, details: "Text too short for fluency stratification." };
-
-  // ── Surface-level L1 markers (Beginner/Intermediate) ─────────────────────
-  // Missing articles, subject-verb agreement errors, preposition confusion
-  const droppedArticleErrors = (text.match(/\b(study|research|result|data|findings?|analysis|survey)\s+(show|indicate|suggest|reveal|demonstrate)\b/gi) || []).length;
-  const svAgreementErrors = (text.match(/\b(they (was|is)|we (was|is)|students (has|was)|people (has|was)|data (are being|is being analyzed))\b/gi) || []).length;
-  const prepConfusion = (text.match(/\b(discuss about|emphasize on|cope up|stress on|mention about|talk about in|focus on in)\b/gi) || []).length;
-
-  // ── Intermediate-level markers ─────────────────────────────────────────────
-  // Tagalog topic-comment discourse structure persists even at intermediate level
-  const topicCommentStructure = (text.match(/\b(as for (the|this|that|my)|with regards? to (the|this|that|my)|speaking of (the|this)|when it comes to (the|this|my))\b/gi) || []).length;
-  // Filipino English collocations (calques from Filipino/Tagalog)
-  const filipinoCalques = (text.match(/\b(give emphasis|make mention|at the present time|in the said|the said study|pursuant to|herein mentioned|it is hoped that|it is opined that|it is humbly|the proponents)\b/gi) || []).length;
-
-  // ── Advanced-level discourse markers ──────────────────────────────────────
-  // High-fluency ESL writers use correct grammar but retain discourse-level patterns.
-  // These are subtler than surface errors and persist into IELTS 7+ writing.
-  // Pattern: over-explicit meta-commentary ("This paper aims to show that...")
-  const metaCommentary = (text.match(/\b(this (paper|study|essay|research|work) (aims to|seeks to|intends to|attempts to|tries to)|the (main|primary|central|key) (objective|purpose|aim|goal) of this|this (section|chapter|paragraph) (will|shall) (discuss|present|examine|analyze))\b/gi) || []).length;
-  // Over-hedged certainty (IELTS writing training produces this pattern)
-  const overHedging = (text.match(/\b(it is (generally|widely|commonly) (believed|accepted|acknowledged|recognized) that|it (has been|is) (often|frequently|repeatedly) (argued|stated|mentioned|noted|observed) that|many (researchers|scholars|experts|academics|studies) (argue|believe|suggest|claim|note) that)\b/gi) || []).length;
-  // Philippine academic discourse formulas (used even at advanced level)
-  const phAcademicFormulas = (text.match(/\b(based on the foregoing|as mentioned (in the preceding|in the earlier|above)|as previously (discussed|stated|mentioned|noted|established)|as gleaned from|it can be gleaned that|to wit:|hence,|verily,|the herein|in consonance with)\b/gi) || []).length;
-
-  // ── Near-native signals (deep discourse, minimal surface errors) ───────────
-  // Near-native writers may not have any surface L1 markers but retain subtle patterns
-  // in discourse organization and topic selection.
-  // Detect: consistent use of Philippine institutional/geographic named entities
-  const phNamedEntities = (text.match(/\b(DepEd|CHED|TESDA|PhilHealth|SSS|GSIS|BIR|LGU|barangay|Sangguniang|Punong Barangay|state university|SUC|BSIT|BSCS|BSBA|HEI|higher education institution|Commission on Higher Education|Department of Education)\b/gi) || []).length;
-  // Subtle Philippine English register markers
-  const phRegisterMarkers = (text.match(/\b(the said|pursuant|in lieu of|as regards|anent|per (the|said)|thru|by virtue of|by means of which|in pursuant to|accordant with)\b/gi) || []).length;
-
-  // ── Compute surface error count (Beginner/Intermediate indicator) ─────────
-  const surfaceErrors = droppedArticleErrors + svAgreementErrors + prepConfusion;
-  const intermediateMarkers = topicCommentStructure + filipinoCalques;
-  const advancedMarkers = metaCommentary + overHedging + phAcademicFormulas;
-  const nearNativeMarkers = phNamedEntities + phRegisterMarkers;
-
-  // ── Fluency level classification ──────────────────────────────────────────
-  let level: ESLFluencyLevel;
-  let confidence: "high" | "medium" | "low";
-  let protectionMultiplier: number;
-
-  if (surfaceErrors >= 2) {
-    level = "beginner"; confidence = "high"; protectionMultiplier = 1.0;
-  } else if (surfaceErrors >= 1 || intermediateMarkers >= 2) {
-    level = "intermediate"; confidence = "high"; protectionMultiplier = 1.0;
-  } else if (advancedMarkers >= 2 || (intermediateMarkers >= 1 && advancedMarkers >= 1)) {
-    level = "advanced"; confidence = "medium"; protectionMultiplier = 0.90;
-  } else if (nearNativeMarkers >= 2 || (advancedMarkers >= 1 && nearNativeMarkers >= 1)) {
-    level = "near-native"; confidence = "medium"; protectionMultiplier = 0.75;
-  } else if (phNamedEntities >= 1 || phRegisterMarkers >= 1) {
-    // Minimal PH markers only — possible near-native or genuine AI with PH context
-    level = "near-native"; confidence = "low"; protectionMultiplier = 0.60;
-  } else {
-    level = "native"; confidence = "low"; protectionMultiplier = 0;
-  }
-
-  const discourseMarkers = advancedMarkers + nearNativeMarkers;
-  const deepSignals: string[] = [];
-  if (metaCommentary > 0) deepSignals.push(`meta-commentary (${metaCommentary})`);
-  if (overHedging > 0) deepSignals.push(`over-hedging (${overHedging})`);
-  if (phAcademicFormulas > 0) deepSignals.push(`PH academic formulas (${phAcademicFormulas})`);
-  if (phNamedEntities > 0) deepSignals.push(`PH institutional markers (${phNamedEntities})`);
-  if (phRegisterMarkers > 0) deepSignals.push(`PH register markers (${phRegisterMarkers})`);
-
-  const levelLabels: Record<ESLFluencyLevel, string> = {
-    "beginner": "Beginner ESL — explicit L1-transfer errors present",
-    "intermediate": "Intermediate ESL — discourse calques and topic-comment structures",
-    "advanced": "Advanced ESL — correct grammar, retained discourse formulas",
-    "near-native": "Near-native ESL — minimal surface markers, institutional/register signals only",
-    "native": "Native English profile — no ESL markers detected",
-  };
-
-  const details = level !== "native"
-    ? `ESL Fluency Level: ${levelLabels[level]} (confidence: ${confidence}). Protection multiplier: ${(protectionMultiplier * 100).toFixed(0)}% of standard ESL penalty. Signals: surface errors=${surfaceErrors}, intermediate markers=${intermediateMarkers}, advanced markers=${advancedMarkers}, near-native markers=${nearNativeMarkers}. Deep discourse signals: ${deepSignals.length > 0 ? deepSignals.join(", ") : "none"}. Phase 1 finding: the ESL gate previously only protected beginner/intermediate writers. Near-native ESL writers now receive partial protection through discourse-level signals.`
-    : `No ESL/Philippine markers detected — applying standard (unpenalized) scoring.`;
-
-  return { level, confidence, discourseMarkers, deepSignals, protectionMultiplier, details };
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 //  ESL SCORE CALIBRATION PENALTY
 //  Applies an actual score reduction when ESL or Philippine context is detected.
 //  This is the key improvement over prior behavior that only warned without adjusting.
 //  Research basis: average false-positive rate on TOEFL essays was 61.3%,
 //  dropping to 11.6% after text perplexity was adjusted for non-native patterns.
 //  Returns 0 (no penalty) to 15 (strong ESL signal = subtract 15 from norm score).
-//  UPDATED (Phase 1 Priority 1): penalty is now modulated by ESL fluency level.
-//  Near-native ESL writers receive 60-75% of the standard penalty rather than full.
 // ─────────────────────────────────────────────────────────────────────────────
-function computeESLScorePenalty(warnings: string[], rawScore = 50, eslFluencyMultiplier = 1.0): number {
+function computeESLScorePenalty(warnings: string[], rawScore = 50): number {
   // OPT A9: Scale ESL penalty by score magnitude.
   // A flat -15 on high-scoring AI text (score=85) still lands in AI zone,
   // but the same flat -15 on a borderline score (score=40) unfairly pushed it to Human.
@@ -3821,8 +3692,7 @@ function computeESLScorePenalty(warnings: string[], rawScore = 50, eslFluencyMul
     : rawScore > 35 ? 0.8
     : 1.0;
 
-  // Phase 1 Priority 1: eslFluencyMultiplier reduces penalty for near-native writers
-  return Math.round(base * scaleFactor * eslFluencyMultiplier);
+  return Math.round(base * scaleFactor);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -4378,215 +4248,7 @@ function toneFlatnessScore(text: string, sentences: string[]): { score: number; 
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  PRIORITY 2 — ADVERSARIAL REFLECTIVE JOURNAL DETECTION
-//  Phase 1 finding: C-002 (Gemini reflective journal) bypassed the ESL gate
-//  because it successfully mimicked personal anecdote markers:
-//    - Filipino proper nouns (barangay, PhilHealth)
-//    - L1-transfer tense errors ("I was shock", "this teach me")
-//    - First-person emotional framing
-//  The root problem: existing anecdote signals detect PRESENCE of personal
-//  story elements but not AUTHENTICITY. Human reflective journals have:
-//    (a) Hyper-specific details: exact numbers, named individuals, precise dates
-//    (b) Temporal incoherence / tense shifts that are natural (not formulaic)
-//    (c) Self-contradiction / hedged memory ("I think", "if I recall", "maybe")
-//    (d) Emotional register shifts (not uniformly positive/reflective)
-//    (e) Unpredictable narrative resolution (AI always resolves positively)
-//
-//  AI adversarial reflective journals have:
-//    - Generic named entities ("an elderly woman", "a patient", "a teacher")
-//    - Formulaic lesson extraction ("This experience taught me...", "I realized...")
-//    - Uniform positive resolution in final paragraph
-//    - Tense errors that are CONSISTENT (all one type = deliberate, not natural)
-//    - No self-contradiction or memory hedging
-//
-//  Score: 0–30 (AI signal; high score means it's likely an AI faking a personal story)
-//  Used as a SUPPLEMENT to the ESL gate when genre = reflective journal.
-// ─────────────────────────────────────────────────────────────────────────────
-
-function adversarialReflectiveJournalScore(text: string, sentences: string[], wc: number): {
-  score: number;
-  isReflectiveJournal: boolean;
-  adversarialSignals: string[];
-  authenticitySignals: string[];
-  details: string;
-} {
-  if (wc < 80) return { score: 0, isReflectiveJournal: false, adversarialSignals: [], authenticitySignals: [], details: "Text too short." };
-
-  // ── Step 1: Is this a reflective journal? ─────────────────────────────────
-  // Detect the reflective genre by first-person past tense density + reflection markers
-  const firstPersonPast = (text.match(/\b(I (was|felt|saw|met|went|had|found|noticed|realized|thought|knew|remember|learned|experienced|encountered|witnessed|tried|helped|joined|became|made|told|asked|said|gave|took|worked|started|decided|wanted|needed|began|came|got|looked|walked|sat|stood|ran|moved|used|put|set|left|held|followed|lived|spent|kept|let|led|shown|shown|described|read|heard|spoke|called|played|opened|closed|turned|stood|seemed|appeared|acted|responded|reacted|helped|treated|cared|served|managed|led|led|returned))\b/gi) || []).length;
-  const reflectionMarkers = (text.match(/\b(this experience (taught|showed|reminded|made|helped|changed|gave|left)|I (realized|understood|learned|discovered|found out|came to realize|came to understand)|looking back|in retrospect|reflecting on|upon reflection|what (struck|surprised|moved|affected|impacted) me|I will never forget|it was (then|at that moment|in that instant) that)\b/gi) || []).length;
-
-  const isReflectiveJournal = firstPersonPast >= 3 && reflectionMarkers >= 1;
-  if (!isReflectiveJournal) {
-    return { score: 0, isReflectiveJournal: false, adversarialSignals: [], authenticitySignals: [], details: "Text not classified as reflective journal — adversarial journal check skipped." };
-  }
-
-  // ── Step 2: Check for AUTHENTIC human signals (these REDUCE the adversarial score) ──
-
-  const authenticitySignals: string[] = [];
-
-  // Hyper-specific details: exact numbers, ages, named real individuals (not "a patient")
-  const specificNumbers = (text.match(/\b(\d{1,3}(-year-old|-years-old| years old| year old)|\d+ (pesos|dollars|patients|students|hours|minutes|days|weeks|years|meters|kilometers|participants|respondents|samples))\b/gi) || []).length;
-  if (specificNumbers >= 2) authenticitySignals.push(`specific numbers (${specificNumbers})`);
-
-  // Named individuals with roles (not just "the patient" but "Ate Maria" / "Sir Reyes")
-  const namedIndividuals = (text.match(/\b(Ate|Kuya|Lolo|Lola|Nanay|Tatay|Inay|Itay|Sir|Ma'am|Mam|Miss|Mrs|Mr|Dr|Prof)\s+[A-Z][a-z]+\b/g) || []).length;
-  if (namedIndividuals >= 1) authenticitySignals.push(`named individuals (${namedIndividuals})`);
-
-  // Self-contradiction / hedged memory (natural human memory is imperfect)
-  const memoryHedging = (text.match(/\b(I think (it was|he was|she was|they were|there were|it happened)|if I (recall|remember) (correctly|right|clearly|well)|I (might be|may be) wrong|I (can't|cannot|don't) remember (exactly|clearly|well|if)|something like that|I'm not (sure|certain|entirely sure)|I believe it was|as far as I (can|could) remember|more or less|approximately|around that time)\b/gi) || []).length;
-  if (memoryHedging >= 1) authenticitySignals.push(`memory hedging (${memoryHedging})`);
-
-  // Negative emotional resolution (human journals don't always end positively)
-  const negativeResolution = (text.match(/\b(I still (struggle|worry|wonder|feel|regret|wish)|it (still bothers|still haunts|still saddens|weighs on) me|I haven't (fully|completely|entirely) (gotten over|recovered|moved on)|I (failed|could not|could't|didn't manage to|wasn't able to)|it (didn't|did not) (work out|go well|end well|turn out|happen)|I was (wrong|mistaken|incorrect|at fault))\b/gi) || []).length;
-  if (negativeResolution >= 1) authenticitySignals.push(`non-positive resolution (${negativeResolution})`);
-
-  // Unresolved narrative elements (AI always wraps everything up neatly)
-  const unresolvedElements = (text.match(/\b(I (still|sometimes) (wonder|think about|question)|I (never found out|never knew|don't know if)|unanswered|unresolved|I (never got to|never had the chance to|wish I had)|I should have|if only I (had|could|knew)|to this day[,\s])\b/gi) || []).length;
-  if (unresolvedElements >= 1) authenticitySignals.push(`unresolved narrative (${unresolvedElements})`);
-
-  // ── Step 3: Check for ADVERSARIAL signals (AI faking personal writing) ────
-
-  const adversarialSignals: string[] = [];
-
-  // Formulaic lesson extraction — AI always extracts a clean moral at the end
-  const formulaicLesson = (text.match(/\b(this experience (has taught|taught|showed|reminded|made) me (that|how|to|the importance|the value|the need)|I (realized|understood|learned) (from this|through this|that|how important|the importance|the value|the significance)|this (taught|showed|reminded|helped|inspired|motivated|encouraged|strengthened) me|from this (experience|encounter|situation|moment|incident|event), I\b)/gi) || []).length;
-  if (formulaicLesson >= 2) adversarialSignals.push(`formulaic lesson extraction (${formulaicLesson})`);
-
-  // Generic entity references (adversarial AI uses placeholder-style named entities)
-  const genericEntities = (text.match(/\b(an elderly (woman|man|patient|person)|a (young|old|sick|poor|frail|elderly) (woman|man|patient|person|student|child)|the (patient|student|client|resident|beneficiary) (who|whose|that)|a (barangay|community) (resident|member|official))\b/gi) || []).length;
-  if (genericEntities >= 2) adversarialSignals.push(`generic entity placeholders (${genericEntities})`);
-
-  // Consistent tense-error type (AI generates ONE type of error repeatedly)
-  // Natural ESL tense errors vary; adversarial AI usually picks one pattern
-  const presentForPastErrors = (text.match(/\b(I (go|come|run|see|meet|feel|think|know|say|tell|give|take|find|look|walk|sit|stand|help|treat|care|serve|work|start|decide|want|need|begin|seem|appear)\b)/g) || []).length;
-  const pastWithWrongAux = (text.match(/\b(I was (go|come|run|see|meet|feel|think|know|say|tell|give|take|find)|I were)\b/gi) || []).length;
-  // Adversarial signal: CONSISTENT use of same error type (>3 of same type = likely deliberate)
-  if (presentForPastErrors >= 3 && pastWithWrongAux === 0) adversarialSignals.push(`consistent L1 error type (present-for-past ×${presentForPastErrors})`);
-  if (pastWithWrongAux >= 3 && presentForPastErrors === 0) adversarialSignals.push(`consistent L1 error type (was+bare ×${pastWithWrongAux})`);
-
-  // Uniform positive resolution despite the story (AI always ends on uplift)
-  const lastParas = text.split(/\n\n+/).slice(-2).join(" ");
-  const positiveResolutionClose = (lastParas.match(/\b(inspired|motivated|strengthened|reinforced|validated|affirmed|grateful|thankful|blessed|privileged|honored|committed|dedicated|determined|resolved|challenged me to|pushed me to|encouraged me to|reminded me of|made me realize the importance|has made me a better|will continue to|I will strive|I will do my best|I will always|I promise to|I am (now|more|better|stronger|determined|committed|inspired|motivated|grateful|thankful))\b/gi) || []).length;
-  if (positiveResolutionClose >= 3 && negativeResolution === 0 && unresolvedElements === 0) {
-    adversarialSignals.push(`uniform positive resolution (${positiveResolutionClose} uplift markers, 0 negative/unresolved)`);
-  }
-
-  // Discourse schema too clean for a personal story (paragraph opener fingerprint adapted)
-  const reflectionOpenerFormulas = sentences.filter(s => {
-    const opener = s.trim().slice(0, 80);
-    return /^(This experience|This encounter|This situation|This moment|This incident|Looking back|Reflecting on|Through this|From this|As I reflect|As I look back)/i.test(opener);
-  }).length;
-  if (reflectionOpenerFormulas >= 2) adversarialSignals.push(`formulaic reflection openers (${reflectionOpenerFormulas})`);
-
-  // ── Step 4: Compute final adversarial score ────────────────────────────────
-  // More adversarial signals + fewer authentic signals = higher AI probability
-
-  const adversarialWeight = adversarialSignals.length * 8;
-  const authenticityPenalty = authenticitySignals.length * 6;
-  let rawScore = Math.max(0, adversarialWeight - authenticityPenalty);
-
-  // Authentic signals alone can push score below zero — floor at 0
-  let score = Math.min(30, rawScore);
-
-  // Boost: if BOTH formulaic lesson + uniform positive resolution present with 0 authenticity → very likely adversarial
-  if (formulaicLesson >= 2 && positiveResolutionClose >= 3 && authenticitySignals.length === 0) {
-    score = Math.min(30, score + 10);
-  }
-
-  const details = score > 0
-    ? `Adversarial reflective journal detected (score: ${score}/30). Genre: reflective journal confirmed (first-person past=${firstPersonPast}, reflection markers=${reflectionMarkers}). Adversarial signals: ${adversarialSignals.join("; ")}. Authenticity signals: ${authenticitySignals.length > 0 ? authenticitySignals.join("; ") : "none detected"}. Phase 1 finding: Gemini successfully mimicked personal writing using generic entities + consistent tense errors + formulaic resolution. This sub-classifier specifically targets that evasion pattern.`
-    : isReflectiveJournal
-      ? `Reflective journal — no adversarial pattern detected. Authenticity signals present: ${authenticitySignals.length > 0 ? authenticitySignals.join("; ") : "standard profile"}. Adversarial signals: ${adversarialSignals.length > 0 ? adversarialSignals.join("; ") : "none"}.`
-      : "Not classified as reflective journal.";
-
-  return { score, isReflectiveJournal, adversarialSignals, authenticitySignals, details };
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  PRIORITY 3 — MULTI-LLM ADVERSARIAL ESL FINGERPRINTS
-//  Phase 1 finding: C-002 was Gemini 1.5 Pro. The existing family fingerprints
-//  detect each LLM's STANDARD output patterns. When prompted to write in ESL
-//  Filipino student style, LLMs retain DIFFERENT residual fingerprints.
-//  This module adds adversarial-mode-specific signals for each family.
-// ─────────────────────────────────────────────────────────────────────────────
-
-function adversarialLLMFingerprintScore(text: string, wc: number): {
-  score: number;
-  suspectedFamily: string | null;
-  adversarialMode: boolean;
-  details: string;
-} {
-  if (wc < 80) return { score: 0, suspectedFamily: null, adversarialMode: false, details: "Too short." };
-
-  // ── GPT-4 adversarial ESL residuals ──────────────────────────────────────
-  // GPT-4 in ESL-mimic mode still uses its characteristic em-dash and parenthetical structure
-  const gptAdvEmDash = (text.match(/—/g) || []).length;
-  // GPT-4 still inserts parenthetical clarifications even in ESL mode: "(i.e., ...)"
-  const gptAdvParenthetical = (text.match(/\(i\.e\.,|\(e\.g\.,|\(that is,|\(meaning,|\(specifically,/gi) || []).length;
-  // GPT-4 lesson-summary headers even in prose: "Key Takeaway:", "Lesson Learned:"
-  const gptAdvHeaders = (text.match(/\b(key (takeaway|lesson|insight|point|message)[:\s]|lesson (learned|gained)[:\s]|main (point|message|insight)[:\s])/gi) || []).length;
-  const gptAdvScore = gptAdvEmDash * 2 + gptAdvParenthetical * 3 + gptAdvHeaders * 4;
-
-  // ── Claude adversarial ESL residuals ─────────────────────────────────────
-  // Claude in ESL-mimic mode retains over-qualified hedging even with L1 errors
-  const claudeAdvHedge = (text.match(/\b(it is worth (noting|mentioning|considering)|it's worth|though it (should be|is|may be)|there (is|are|may be) (something|a certain|a kind of))\b/gi) || []).length;
-  // Claude inserts meta-commentary about the experience's complexity
-  const claudeAdvMeta = (text.match(/\b(complex|complexity|nuanced|nuances|grapple|tension between|what (makes|struck) (this|me|it)|speaks to|at (its|the) core)\b/gi) || []).length;
-  const claudeAdvScore = claudeAdvHedge * 3 + claudeAdvMeta * 2;
-
-  // ── Gemini adversarial ESL residuals (C-002 pattern) ─────────────────────
-  // Phase 1 C-002 finding: Gemini uses a "problem → helper → resolution → lesson" schema
-  // even when writing personal narrative. The structural clean-up is Gemini's signature.
-  const geminiAdvSchema = (text.match(/\b(I (noticed|saw|met|encountered|came across) (a|an|the|one) (patient|student|person|woman|man|elder|child|client|resident|family|mother|father|lola|lolo))\b/gi) || []).length;
-  // Gemini in narrative mode uses "here is" / "here are" summary patterns
-  const geminiAdvSummary = (text.match(/\b(to (summarize|sum up|conclude|recap),|in (short|brief|summary|conclusion|closing),|overall[,\s]|ultimately[,\s]|all in all[,\s]|in the end[,\s]|in retrospect[,\s])\b/gi) || []).length;
-  // Gemini uses numbered/bulleted lesson lists even in narrative context
-  const geminiAdvList = (text.match(/(first(ly)?[,.]|second(ly)?[,.]|third(ly)?[,.]|final(ly)?[,.]|lastly[,.])/gi) || []).length;
-  // Gemini closing recommendation pattern even in personal essays
-  const geminiAdvRec = (text.match(/\b(I (would|will|am going to|plan to) (always|never|strive to|continue to|do my best to|make sure to|ensure that|remember to))\b/gi) || []).length;
-  const geminiAdvScore = geminiAdvSchema * 3 + geminiAdvSummary * 4 + geminiAdvList * 2 + geminiAdvRec * 3;
-
-  // ── Llama adversarial ESL residuals ──────────────────────────────────────
-  // Llama in ESL mode retains its heavy modal hedging ("may", "might", "could")
-  const llamaAdvModal = (text.match(/\b(may (have|be|not|also|even|just|still|seem|appear|feel|look)|might (have|be|not|also|even|just|still|seem|appear|feel|look))\b/gi) || []).length;
-  // Llama over-explains cause-and-effect even in narrative mode
-  const llamaAdvCausal = (text.match(/\b(this (is because|was because|happened because|led to|resulted in|caused me to)|because of (this|that|the situation|the experience|what happened|the incident))\b/gi) || []).length;
-  const llamaAdvScore = (llamaAdvModal > 4 ? llamaAdvModal * 2 : 0) + llamaAdvCausal * 2;
-
-  // ── DeepSeek adversarial ESL residuals ───────────────────────────────────
-  // DeepSeek in ESL mode retains Latinate/formal vocabulary even when writing personal narrative
-  const deepseekAdvFormal = (text.match(/\b(undeniably|undoubtedly|evidently|apparently|ostensibly|manifestly|incontrovertibly|unequivocally|it is (imperative|paramount|indispensable) (that|to)|it is (incumbent upon|obligatory for)|as evidenced by|as demonstrated by)\b/gi) || []).length;
-  const deepseekAdvScore = deepseekAdvFormal * 3;
-
-  // ── Score each family and find winner ─────────────────────────────────────
-  const familyScores = [
-    { family: "GPT-4/GPT-4o", score: gptAdvScore },
-    { family: "Claude",       score: claudeAdvScore },
-    { family: "Gemini",       score: geminiAdvScore },
-    { family: "Llama 3",      score: llamaAdvScore },
-    { family: "DeepSeek",     score: deepseekAdvScore },
-  ];
-
-  const sorted = [...familyScores].sort((a, b) => b.score - a.score);
-  const best = sorted[0];
-  const second = sorted[1];
-  const gap = best.score - second.score;
-  const clearWinner = gap >= 4 && best.score >= 6;
-  const adversarialMode = best.score >= 6; // any family residual ≥6 = adversarial mode suspected
-
-  const signalScore = clearWinner && best.score >= 12 ? 18
-    : clearWinner && best.score >= 8 ? 12
-    : adversarialMode ? 7
-    : 0;
-
-  const details = signalScore > 0
-    ? `Adversarial LLM ESL residuals detected. Suspected family: ${clearWinner ? best.family : "inconclusive"} (score ${best.score}, gap vs runner-up: ${gap}). Family scores: GPT-4=${gptAdvScore}, Claude=${claudeAdvScore}, Gemini=${geminiAdvScore}, Llama=${llamaAdvScore}, DeepSeek=${deepseekAdvScore}. These signals detect the LLM-specific patterns that PERSIST even when the model is prompted to write in Filipino ESL student style. Phase 1 finding: C-002 (Gemini) showed geminiAdvSummary=${geminiAdvSummary} and geminiAdvSchema=${geminiAdvSchema} — Gemini's structural cleanup signature survived ESL mimicry.`
-    : `No adversarial LLM ESL residuals detected (all family scores < 6).`;
-
-  return { score: signalScore, suspectedFamily: clearWinner ? best.family : null, adversarialMode, details };
-}
+//  NEW SIGNAL D — VAGUE CITATION PATTERN
 //  AI frequently generates plausible-sounding but unverifiable references:
 //  "according to research", "studies show", "experts agree", "research
 //  indicates", without naming actual sources. Human writers cite specifically
@@ -5089,9 +4751,9 @@ function ratePerThousandWords(hitCount: number, wordCount: number): number {
 }
 
 // Model version metadata (Improvement #20)
-const MODEL_VERSION = "MultiLens v4.2";
+const MODEL_VERSION = "MultiLens v4.1";
 const MODEL_DATE    = "May 2026";
-const MODEL_SIGNALS = "53 signals · 3 engines · Deterministic · Platt-calibrated · Genre-adaptive · ESL Fluency-Stratified · Adversarial-Journal-Resistant";
+const MODEL_SIGNALS = "47 signals · 3 engines · Deterministic · Platt-calibrated · Genre-adaptive";
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  IMPROVEMENT #10 — MEMOIZATION CACHE
@@ -5692,56 +5354,12 @@ function runPerplexityEngine(text: string): EngineResult {
   const thesisGenreForESL = detectThesisGenre(text, sentences);
   const eslBypassActive = thesisGenreForESL.isThesisConclusion &&
     thesisGenreForESL.detectedMarkers.includes("zero-L1-transfer");
-
-  // ── PRIORITY 1: Fluency-stratified ESL protection ──────────────────────────
-  // Phase 1 finding: The ESL gate only protected beginner/intermediate writers.
-  // Near-native Filipino/ESL writers (IELTS 7+, high academic fluency) received no
-  // protection because they lack surface-level L1-transfer errors. Detect their
-  // fluency level and apply a proportional penalty multiplier.
-  const eslFluencyProfile = detectESLFluencyLevel(text, wc, sentences);
-  if (eslFluencyProfile.level !== "native" && eslFluencyProfile.protectionMultiplier > 0) {
-    // Add fluency-level context note to reliability warnings for UI display
-    const fluencyNote = `ESL Fluency Level: ${eslFluencyProfile.level} (${eslFluencyProfile.confidence} confidence) — protection multiplier: ${(eslFluencyProfile.protectionMultiplier * 100).toFixed(0)}%. ${eslFluencyProfile.deepSignals.length > 0 ? "Discourse signals: " + eslFluencyProfile.deepSignals.join(", ") + "." : ""}`;
-    if (!reliabilityWarnings.some(w => w.includes("Fluency Level"))) {
-      reliabilityWarnings.push(fluencyNote);
-    }
-  }
-
-  const eslScorePenalty = eslBypassActive ? 0 : computeESLScorePenalty(
-    reliabilityWarnings,
-    Math.round(norm),
-    eslFluencyProfile.protectionMultiplier
-  );
+  const eslScorePenalty = eslBypassActive ? 0 : computeESLScorePenalty(reliabilityWarnings, Math.round(norm));
   if (eslScorePenalty > 0) {
     norm = Math.max(0, norm - eslScorePenalty);
   }
   if (eslBypassActive) {
     reliabilityWarnings.push("Thesis conclusion genre detected with zero L1-transfer features — ESL calibration suppressed. AI-polished conclusions show no ESL markers precisely because they were written/edited by an LLM. Score not reduced for Philippine academic context in this genre.");
-  }
-
-  // ── PRIORITY 2: Adversarial reflective journal detection ────────────────────
-  // Phase 1 finding: C-002 (Gemini reflective journal) bypassed the ESL gate by
-  // mimicking personal anecdote markers. This sub-classifier specifically targets
-  // the adversarial pattern: generic entities + consistent tense errors + formulaic
-  // positive resolution + no authentic specificity signals.
-  const reflJournalResult = adversarialReflectiveJournalScore(text, sentences, wc);
-  if (reflJournalResult.isReflectiveJournal && reflJournalResult.score > 0) {
-    // Adversarial journal signals detected — add score back to norm
-    // (This partially counteracts any ESL penalty that may have been applied)
-    const adversarialBoost = Math.round(reflJournalResult.score * 0.6); // 60% of adversarial score added
-    norm = Math.min(100, norm + adversarialBoost);
-    reliabilityWarnings.push(`Adversarial reflective journal signals detected (score: ${reflJournalResult.score}/30): ${reflJournalResult.adversarialSignals.slice(0, 3).join("; ")}. Phase 1 finding: this pattern targets Gemini/LLM-generated personal narratives that use generic entity placeholders and formulaic lesson extraction to evade the ESL gate.`);
-  }
-
-  // ── PRIORITY 3: Adversarial LLM fingerprints ────────────────────────────────
-  // When text activates the ESL gate (possible ESL context), additionally check for
-  // residual LLM family signals that PERSIST even when the model writes in ESL mode.
-  if (eslFluencyProfile.level !== "native" || (reliabilityWarnings.some(w => w.includes("Philippine") || w.includes("ESL")))) {
-    const advFingerprintResult = adversarialLLMFingerprintScore(text, wc);
-    if (advFingerprintResult.adversarialMode && advFingerprintResult.score > 0) {
-      norm = Math.min(100, norm + Math.round(advFingerprintResult.score * 0.5)); // 50% of adversarial fingerprint score
-      reliabilityWarnings.push(`Adversarial LLM residuals detected${advFingerprintResult.suspectedFamily ? ` — suspected ${advFingerprintResult.suspectedFamily}` : ""}: LLM-specific patterns persist even in ESL-mimicry mode. Score partially restored.`);
-    }
   }
 
   // ── Improvement #9: Genre-adaptive adjustment ────────────────────────────
@@ -6413,23 +6031,9 @@ function runBurstinessEngine(text: string): EngineResult {
   // BYPASS: same thesis-conclusion + zero-L1-transfer logic as Engine A.
   const eslBypassB = thesisGenreB.isThesisConclusion &&
     thesisGenreB.detectedMarkers.includes("zero-L1-transfer");
-
-  // ── PRIORITY 1 (Engine B): Fluency-stratified ESL protection ───────────────
-  const eslFluencyProfileB = detectESLFluencyLevel(text, wc, sentences);
-
-  const eslScorePenaltyB = eslBypassB ? 0 : computeESLScorePenalty(
-    reliabilityWarnings,
-    Math.round(norm),
-    eslFluencyProfileB.protectionMultiplier
-  );
+  const eslScorePenaltyB = eslBypassB ? 0 : computeESLScorePenalty(reliabilityWarnings, Math.round(norm));
   if (eslScorePenaltyB > 0) {
     norm = Math.max(0, norm - eslScorePenaltyB * 0.6); // softer for Engine B — burstiness partly ESL-immune
-  }
-
-  // ── PRIORITY 2 (Engine B): Adversarial reflective journal ──────────────────
-  const reflJournalResultB = adversarialReflectiveJournalScore(text, sentences, wc);
-  if (reflJournalResultB.isReflectiveJournal && reflJournalResultB.score > 0) {
-    norm = Math.min(100, norm + Math.round(reflJournalResultB.score * 0.4));
   }
 
   const rawScore = Math.round(Math.min(100, Math.max(0, norm)));
@@ -9472,12 +9076,7 @@ function DatasetEvaluationPanel({
   const [dragOver, setDragOver] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const [activeMetricTab, setActiveMetricTab] = useState<"table" | "roc" | "confusion" | "compare">("table");
-  // ── ROC-optimal threshold per Phase 2 testing (Sheet 5, row t=35):
-  //    TPR rises from 25% → 62.5% while FPR stays at 0.111 (vs 0 at t=50).
-  //    FPR on Corpus A (Filipino/ESL human) remains at or near 0 because
-  //    all Corpus A calibrated scores fell between 17.5–35.0.
-  //    Previously 15 — updated to 35 to match the ROC-optimal operating point.
-  const [rocThreshold, setRocThreshold] = useState(35);
+  const [rocThreshold, setRocThreshold] = useState(15);
 
   const handleFile = async (file: File) => {
     setError(""); setRows([]); setResults(null);
@@ -9531,15 +9130,10 @@ function DatasetEvaluationPanel({
       name: runName || `Run ${new Date().toLocaleTimeString()}`,
       rowCount: batchResults.length,
       hasGroundTruth: withGT.length > 0,
-      // ── v2 schema: persist the threshold and signal version used for this run.
-      //    This ensures the Experiment Tracking Panel can label runs correctly
-      //    and prevent silent comparison of runs computed at different thresholds.
-      threshold: rocThreshold,
-      signalVersion: "v1",
       avgAI: Math.round(batchResults.reduce((s, r) => s + r.combinedAI, 0) / batchResults.length),
-      aiCount: batchResults.filter(r => r.combinedAI >= rocThreshold).length,
-      humanCount: batchResults.filter(r => r.combinedAI < rocThreshold && !r.verdict.toLowerCase().includes("review")).length,
-      mixedCount: batchResults.filter(r => r.combinedAI >= 35 && r.combinedAI < rocThreshold).length,
+      aiCount: batchResults.filter(r => r.verdict.toLowerCase().includes("ai")).length,
+      humanCount: batchResults.filter(r => r.verdict.toLowerCase().includes("human") && !r.verdict.toLowerCase().includes("review")).length,
+      mixedCount: batchResults.filter(r => r.verdict.toLowerCase().includes("mixed") || r.verdict.toLowerCase().includes("review")).length,
       accuracy: withGT.length > 0 ? metrics.accuracy : undefined,
       precision: withGT.length > 0 ? metrics.precision : undefined,
       recall: withGT.length > 0 ? metrics.recall : undefined,
@@ -9635,7 +9229,7 @@ function DatasetEvaluationPanel({
               {[
                 { label: "Texts Analyzed", val: results.length, color: "#1b3a6b" },
                 { label: `AI-Flagged (≥${rocThreshold}%)`, val: aiCountDisplay, color: "#dc2626" },
-                { label: `Needs Review (35–${rocThreshold - 1}%)`, val: results ? results.filter(r => r.combinedAI >= 35 && r.combinedAI < rocThreshold).length : 0, color: "#d97706" },
+                { label: `Human (<${rocThreshold}%)`, val: humanCountDisplay, color: "#16a34a" },
                 { label: "Avg AI Score", val: `${avgAIDisplay}%`, color: "#7c3aed" },
               ].map(({ label, val, color }) => (
                 <div key={label} className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-center">
@@ -9648,9 +9242,7 @@ function DatasetEvaluationPanel({
             {/* Accuracy Metrics */}
             {metrics && hasGT && (
               <div className="rounded-xl bg-indigo-50 border border-indigo-200 p-4 mb-5">
-                <p className="text-xs font-bold text-indigo-800 mb-3">
-                  Classification Metrics (threshold: {rocThreshold}% · three-zone: Human &lt;35% / Review 35–{rocThreshold - 1}% / AI ≥{rocThreshold}%)
-                </p>
+                <p className="text-xs font-bold text-indigo-800 mb-3">Classification Metrics (threshold: {rocThreshold}%)</p>
                 <div className="grid grid-cols-4 gap-3 mb-3">
                   {[
                     { label: "Accuracy", val: `${(metrics.accuracy * 100).toFixed(1)}%` },
@@ -9683,55 +9275,28 @@ function DatasetEvaluationPanel({
                       <th className="text-center py-2 px-2 text-slate-500 font-semibold">AI%</th>
                       <th className="text-center py-2 px-2 text-[#1b3a6b] font-semibold">PS</th>
                       <th className="text-center py-2 px-2 text-[#16a34a] font-semibold">BC</th>
-                      <th className="text-center py-2 px-2 text-slate-400 font-semibold">Words</th>
                       {hasGT && <th className="text-center py-2 px-2 text-slate-500 font-semibold">Truth</th>}
                       {hasGT && <th className="text-center py-2 px-2 text-slate-500 font-semibold">Correct?</th>}
                     </tr>
                   </thead>
                   <tbody>
                     {results.map(r => {
-                      // ── Three-zone verdict logic (ROC-optimal t=35) ──────────────────
-                      // Zone 1: score ≥ rocThreshold (default 35) → AI-Flagged
-                      // Zone 2: score 35–(rocThreshold-1) → Needs Human Review
-                      //         (only applies when user has moved slider above 35)
-                      // Zone 3: score < 35 → Human-Written
-                      // When rocThreshold is 35 (default), zones 1 and 2 collapse
-                      // into a single AI/Review boundary at 35.
-                      const isAI     = r.combinedAI >= rocThreshold;
-                      const isReview = !isAI && r.combinedAI >= 35;
-                      const predictedAI = isAI;
+                      const predictedAI = r.combinedAI >= rocThreshold;
                       const correct = r.row.groundTruth
                         ? (r.row.groundTruth === "AI" ? predictedAI : !predictedAI)
                         : undefined;
-                      const zoneLabel  = isAI ? "AI-Generated" : isReview ? "Needs Review" : "Human-Written";
-                      const zoneColor  = isAI ? "#dc2626" : isReview ? "#d97706" : "#16a34a";
-                      const zoneBg     = isAI ? "#fef2f2" : isReview ? "#fffbeb" : "#f0fdf4";
-                      const zoneBorder = isAI ? "#fca5a5" : isReview ? "#fcd34d" : "#86efac";
-                      // ── Word-count reliability flag ──────────────────────────────────
-                      // Texts under 150 words silently disable TTR, hapax, and
-                      // moving-window TTR signals. Surface this to the reviewer.
-                      const wordCount = r.row.text.trim().split(/\s+/).length;
-                      const shortText = wordCount < 150;
+                      const tier = getTier(r.combinedAI);
                       return (
                         <tr key={r.row.id} className="border-b border-slate-50 hover:bg-slate-50/50 transition-colors">
                           <td className="py-1.5 px-2 text-slate-700 max-w-[120px] truncate">{r.row.label ?? r.row.id}</td>
                           <td className="py-1.5 px-2">
-                            <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold" style={{ color: zoneColor, background: zoneBg, border: `1px solid ${zoneBorder}` }}>
-                              {zoneLabel}
+                            <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold" style={{ color: tier.color, background: tier.bg, border: `1px solid ${tier.border}` }}>
+                              {r.verdict}
                             </span>
                           </td>
-                          <td className="py-1.5 px-2 text-center font-bold" style={{ color: r.combinedAI >= 70 ? "#dc2626" : r.combinedAI >= 35 ? "#d97706" : "#16a34a" }}>{r.combinedAI}%</td>
+                          <td className="py-1.5 px-2 text-center font-bold" style={{ color: r.combinedAI >= 70 ? "#dc2626" : r.combinedAI >= 50 ? "#d97706" : "#16a34a" }}>{r.combinedAI}%</td>
                           <td className="py-1.5 px-2 text-center text-slate-500">{r.perpScore}</td>
                           <td className="py-1.5 px-2 text-center text-slate-500">{r.burstScore}</td>
-                          <td className="py-1.5 px-2 text-center">
-                            {shortText ? (
-                              <span className="px-1 py-0.5 rounded text-[9px] font-bold bg-amber-50 text-amber-700 border border-amber-200" title="Text under 150 words — TTR, hapax, and moving-window signals inactive. Score less reliable.">
-                                {wordCount}⚠
-                              </span>
-                            ) : (
-                              <span className="text-[9px] text-slate-400">{wordCount}</span>
-                            )}
-                          </td>
                           {hasGT && <td className="py-1.5 px-2 text-center">
                             <span className={`px-1 py-0.5 rounded text-[9px] font-bold ${r.row.groundTruth === "AI" ? "bg-red-100 text-red-700" : "bg-emerald-100 text-emerald-700"}`}>{r.row.groundTruth ?? "—"}</span>
                           </td>}
@@ -9918,16 +9483,6 @@ function ExperimentTrackingPanel({ experiments, onClear }: { experiments: Experi
                 <span>·</span>
                 <span className="text-emerald-600 font-semibold">{run.humanCount} Human</span>
               </div>
-              {/* ── v2 schema: show threshold + signal version so reviewer knows
-                    what config this run used. Legacy v1 runs show "v1 / t=?" */}
-              <div className="mt-0.5 flex items-center gap-1.5">
-                <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-slate-100 text-slate-500">
-                  {run.signalVersion ?? "v1"}
-                </span>
-                <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-indigo-50 text-indigo-600">
-                  t={run.threshold ?? "?"}%
-                </span>
-              </div>
               {run.accuracy !== undefined && (
                 <div className="mt-1 flex items-center gap-2 text-[10px]">
                   <span className="text-indigo-600 font-bold">Acc: {(run.accuracy * 100).toFixed(1)}%</span>
@@ -9945,16 +9500,7 @@ function ExperimentTrackingPanel({ experiments, onClear }: { experiments: Experi
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 space-y-5">
             <div>
               <p className="text-sm font-bold text-slate-800">{selected.name}</p>
-              <div className="flex items-center gap-2 mt-0.5">
-                <p className="text-xs text-slate-400">{new Date(selected.ts).toLocaleString()} · {selected.rowCount} texts</p>
-                <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-slate-100 text-slate-500">{selected.signalVersion ?? "v1"}</span>
-                <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-indigo-50 text-indigo-600">threshold {selected.threshold ?? "?"}%</span>
-              </div>
-              {selected.threshold !== undefined && selected.threshold !== 35 && (
-                <p className="text-[9px] text-amber-600 mt-1 bg-amber-50 border border-amber-200 rounded px-2 py-1">
-                  ⚠ This run used threshold {selected.threshold}% — metrics are not directly comparable to runs at the default t=35%.
-                </p>
-              )}
+              <p className="text-xs text-slate-400">{new Date(selected.ts).toLocaleString()} · {selected.rowCount} texts</p>
             </div>
 
             {/* Score distribution bar chart */}
@@ -10297,25 +9843,6 @@ export default function DetectorPage() {
   const [dragOver,       setDragOver]       = useState(false);
   const [urlInput,       setUrlInput]       = useState("");
   const [urlLoading,     setUrlLoading]     = useState(false);
-
-  // ── PRIORITY 4 — Confidence Threshold Control & Reporting Guard ─────────────
-  // Phase 1 finding: for academic integrity contexts, the default 0.5 threshold
-  // creates an 11% FPR at the single-threshold operating point. A stricter threshold
-  // (0.65+) reduces FPR to near-zero at the cost of some recall.
-  // The academicIntegrityMode state activates:
-  //   (a) A higher effective detection threshold (0.65 vs 0.50)
-  //   (b) A "PRELIMINARY — Pilot Study Caution" watermark on AI verdicts
-  //   (c) Suppression of high-confidence labels when corpus size is small
-  //   (d) An explicit Phase 2 disclaimer appended to all AI verdicts
-  type ConfidenceMode = "standard" | "academic_integrity" | "research";
-  const [confidenceMode, setConfidenceMode] = useState<ConfidenceMode>("standard");
-  // academicIntegrityMode: raises bar for AI verdict — only labels AI when
-  // combined score ≥ 65 (vs 50 default) AND both engines agree at HIGH strength
-  const academicIntegrityMode = confidenceMode === "academic_integrity";
-  const researchMode = confidenceMode === "research";
-  // Reporting guard: when true, AI verdicts below 75 carry a "PRELIMINARY" badge
-  const reportingGuardActive = confidenceMode !== "standard";
-
   const { user, loading: authLoading, error: authError, signInWithGoogle, signInAnon, signOut } = useFirebaseAuth();
 
   // ── Admin access control (server-side session) ───────────────────────────
@@ -11133,64 +10660,8 @@ export default function DetectorPage() {
                       Clear
                     </button>
                   )}
-
-                  {/* ── PRIORITY 4: Confidence Mode Selector ─────────────────────────
-                      Phase 1 finding: default 0.5 threshold has ~11% FPR at single-
-                      threshold operating point. Academic integrity use cases need ≥0.65.
-                      Research mode adds PRELIMINARY badges to all AI verdicts <75. */}
-                  <div className="ml-auto flex items-center gap-2">
-                    <span className="text-[10px] text-slate-400 font-semibold hidden sm:block">Mode:</span>
-                    <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-0.5">
-                      {([
-                        { id: "standard",           label: "Standard",    title: "Default threshold (0.50). Balanced precision/recall." },
-                        { id: "academic_integrity", label: "Academic",    title: "Stricter threshold (0.65). Minimizes false positives. Phase 1 recommendation for academic integrity use." },
-                        { id: "research",           label: "Research",    title: "Standard threshold + PRELIMINARY badges on all AI verdicts. Recommended for Phase 2 dataset evaluation." },
-                      ] as const).map(mode => (
-                        <button key={mode.id}
-                          onClick={() => setConfidenceMode(mode.id)}
-                          title={mode.title}
-                          className={`px-2.5 py-1 rounded-md text-[10px] font-semibold transition-all ${
-                            confidenceMode === mode.id
-                              ? mode.id === "academic_integrity" ? "bg-amber-600 text-white shadow-sm"
-                              : mode.id === "research" ? "bg-purple-600 text-white shadow-sm"
-                              : "bg-white text-slate-900 shadow-sm"
-                              : "text-slate-500 hover:text-slate-700"
-                          }`}>
-                          {mode.label}
-                        </button>
-                      ))}
-                    </div>
-                    {academicIntegrityMode && (
-                      <span className="hidden sm:flex items-center gap-1 text-[9px] text-amber-700 font-bold bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded-md">
-                        ⚖ Stricter threshold active
-                      </span>
-                    )}
-                    {researchMode && (
-                      <span className="hidden sm:flex items-center gap-1 text-[9px] text-purple-700 font-bold bg-purple-50 border border-purple-200 px-1.5 py-0.5 rounded-md">
-                        🔬 Preliminary badges on
-                      </span>
-                    )}
-                  </div>
-                  <span className="text-[10px] text-slate-300 hidden sm:block">⌘ Enter to analyze</span>
+                  <span className="text-[10px] text-slate-300 ml-auto hidden sm:block">⌘ Enter to analyze</span>
                 </div>
-
-                {/* Academic Integrity Mode notice — shown when active */}
-                {academicIntegrityMode && (
-                  <div className="mt-2 flex items-start gap-2 rounded-xl bg-amber-50 border border-amber-200 px-3 py-2">
-                    <span className="text-sm flex-shrink-0">⚖️</span>
-                    <p className="text-[11px] text-amber-800 leading-relaxed">
-                      <span className="font-bold">Academic Integrity Mode active.</span> Phase 1 finding: the default threshold produces ~11% FPR at the single operating point. This mode raises the effective AI verdict threshold to 65% (vs 50% default) and requires both engines at HIGH strength before issuing an AI verdict. Recall is reduced but false positive rate on Filipino/ESL writing drops toward zero. Per Phase 1 analysis: do not use any result as grounds for sanctions without additional human review.
-                    </p>
-                  </div>
-                )}
-                {researchMode && (
-                  <div className="mt-2 flex items-start gap-2 rounded-xl bg-purple-50 border border-purple-200 px-3 py-2">
-                    <span className="text-sm flex-shrink-0">🔬</span>
-                    <p className="text-[11px] text-purple-800 leading-relaxed">
-                      <span className="font-bold">Research Mode active.</span> Per Phase 1 pilot analysis (n=17 samples): scores are preliminary indicators. PRELIMINARY badges will appear on all AI verdicts below 75% confidence. This mode is recommended for Phase 2 dataset evaluation where pilot metrics should not be reported as final accuracy.
-                    </p>
-                  </div>
-                )}
               </div>
             </div>
 
@@ -11218,23 +10689,7 @@ export default function DetectorPage() {
                       {/* Main verdict */}
                       <div className="flex-1 min-w-0 text-center sm:text-left">
                         <div className="flex items-center justify-center sm:justify-start gap-2 flex-wrap mb-1">
-                          {/* PRIORITY 4: Academic Integrity Mode — override verdict label when AI score < 65 */}
-                          {academicIntegrityMode && combined.avgAI >= 50 && combined.avgAI < 65 ? (
-                            <span className="text-xl font-extrabold text-amber-600">Needs Human Review</span>
-                          ) : (
-                            <span className="text-xl font-extrabold" style={{ color: combined.tier.color }}>{combined.tier.label}</span>
-                          )}
-                          {/* PRIORITY 4: PRELIMINARY badge in Research Mode */}
-                          {researchMode && combined.avgAI >= 50 && combined.avgAI < 75 && (
-                            <span className="flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-100 border border-purple-300 text-purple-700">
-                              🔬 PRELIMINARY
-                            </span>
-                          )}
-                          {researchMode && combined.avgAI >= 75 && (
-                            <span className="flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-red-100 border border-red-300 text-red-700">
-                              🔬 PRELIMINARY · High Confidence
-                            </span>
-                          )}
+                          <span className="text-xl font-extrabold" style={{ color: combined.tier.color }}>{combined.tier.label}</span>
                           {loadingN && (
                             <span className="text-[10px] text-blue-500 font-semibold bg-blue-50 border border-blue-100 px-2 py-0.5 rounded-full flex items-center gap-1">
                               <svg className="animate-spin h-2.5 w-2.5" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/></svg>
@@ -11242,15 +10697,6 @@ export default function DetectorPage() {
                             </span>
                           )}
                         </div>
-                        {/* PRIORITY 4: Phase 1 reporting disclaimer appended under verdict in research/academic modes */}
-                        {reportingGuardActive && combined.avgAI >= 50 && (
-                          <div className="mb-2 text-[10px] leading-relaxed px-2.5 py-1.5 rounded-lg border"
-                            style={{ background: researchMode ? "#faf5ff" : "#fffbeb", borderColor: researchMode ? "#d8b4fe" : "#fcd34d", color: researchMode ? "#6b21a8" : "#92400e" }}>
-                            {researchMode
-                              ? "⚠ Phase 1 pilot (n=17): metrics are preliminary indicators only. Do not cite these results as final accuracy in publications without Phase 2 full-corpus validation (target n=750)."
-                              : "⚖ Academic Integrity Mode: stricter 65% threshold active. This result should be reviewed by a qualified instructor before any academic decision."}
-                          </div>
-                        )}
                         <p className="text-sm text-slate-500 mb-1">Combined result from {neuralResult ? 3 : 2} detection engines
                           {combined.calibrationShift !== 0 && (
                             <span
