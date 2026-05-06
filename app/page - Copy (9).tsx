@@ -4571,7 +4571,7 @@ function adversarialLabReportAbstractScore(text: string, sentences: string[], wc
 
   const abstractMarkers = (text.match(/\b(this (study|paper|research|article|investigation) (aims?|seeks?|investigates?|examines?|explores?|presents?|proposes?|analyzes?|evaluates?|assesses?|demonstrates?|shows?|reveals?|provides?)|the (purpose|objective|aim|goal) of this (study|research|paper|investigation|work)|we (present|propose|examine|investigate|analyze|evaluate|assess|demonstrate|show|report|describe)|the (results?|findings?|analysis|data|evidence) (show|suggest|indicate|reveal|demonstrate|confirm)|keywords?:|abstract:|in (this|the present) (study|paper|research|investigation)|this (work|study) contributes?|the proposed (method|model|approach|framework|system|algorithm))\b/gi) || []).length;
 
-  const isLabOrAbstract = (labMarkers >= 3) || (abstractMarkers >= 2) || genre === "lab_report" || genre === "academic_essay" || genre === "research_abstract";
+  const isLabOrAbstract = (labMarkers >= 3) || (abstractMarkers >= 2) || genre === "lab_report" || genre === "academic_essay";
   if (!isLabOrAbstract) {
     return { score: 0, isLabOrAbstract: false, adversarialSignals: [], authenticitySignals: [], details: "Text not classified as lab report or research abstract — adversarial lab/abstract check skipped." };
   }
@@ -5101,7 +5101,7 @@ function stripCodeAndTableBlocks(text: string): string {
 //  genre-specific signal weighting in engines.
 // ─────────────────────────────────────────────────────────────────────────────
 
-type GenreType = "technical" | "academic_essay" | "research_abstract" | "narrative" | "reflective" | "lab_report" | "thesis_conclusion" | "general";
+type GenreType = "technical" | "academic_essay" | "narrative" | "reflective" | "lab_report" | "thesis_conclusion" | "general";
 
 interface GenreProfile {
   genre: GenreType;
@@ -5128,25 +5128,6 @@ function classifyGenre(text: string, words: string[]): GenreProfile {
   // Lab report signals
   const labMarkers = (text.match(/\b(hypothesis|methodology|procedure|apparatus|specimen|control group|experimental|results|data analysis|observation|measurement|error margin|statistical significance|p-value|sample size|variables?)\b/gi) || []).length;
 
-  // ── Research abstract signals (Improvement 2 gap fix — Phase 2) ───────────
-  // Research Paper Abstracts had FPR 11.1% in Phase 2. They were folding into
-  // `academic_essay` with low confidence, bypassing the genreProfile.confidence > 0.35
-  // guard in the ESL suppression block. Dedicated abstract detection raises confidence
-  // so the −6 pt genre ESL penalty reliably fires.
-  //
-  // Structural markers: IMRaD-lite structure (Background→Method→Result→Conclusion),
-  // short length (abstracts are typically 150–350 words), keyword header presence,
-  // structured sentence openers, passive-heavy methods sentence.
-  const abstractStructureMarkers = (text.match(/\b(this (study|paper|research|article|investigation|work) (aims?|seeks?|investigates?|examines?|explores?|presents?|proposes?|analyzes?|evaluates?|assesses?|demonstrates?|develops?|identifies?|determines?|compares?)|the (purpose|objective|aim|goal|rationale) of (this|the) (study|research|paper|investigation|work)|we (present|propose|examine|investigate|analyze|evaluate|assess|demonstrate|developed|conducted|collected|recruited|measured|compared)|the (results?|findings?|outcomes?|data|analysis|evidence) (show|suggest|indicate|reveal|demonstrate|confirm|support)|in (this|the present|the current) (study|paper|research|investigation)|keywords?:|abstract:|background:|methods?:|results?:|conclusion:|implications?:|significance:)\b/gi) || []).length;
-  const abstractLengthSignal = words.length >= 100 && words.length <= 400 ? 1 : 0;
-  const abstractPassiveDensity = (() => {
-    const passiveCount = (text.match(/\b(is|are|was|were|has been|have been|will be|were)\s+[a-z]{3,}(ed|en)\b/gi) || []).length;
-    const sentCount = Math.max((text.match(/[.!?]+/g) || []).length, 1);
-    return passiveCount / sentCount;
-  })();
-  const abstractPassiveSignal = abstractPassiveDensity >= 0.4 ? 1 : 0;
-  const abstractRate = (abstractStructureMarkers * 2 + abstractLengthSignal * 3 + abstractPassiveSignal) / wc * 100;
-
   const techRate = techTermCount / wc * 100;
   const essayRate = essayMarkers / wc * 100;
   const narrativeRate = narrativeMarkers / wc * 100;
@@ -5155,7 +5136,6 @@ function classifyGenre(text: string, words: string[]): GenreProfile {
 
   const scores: Array<[GenreType, number]> = [
     ["technical",          techRate * 2],
-    ["research_abstract",  abstractRate * 4],   // high weight: IMRaD structure markers are specific
     ["academic_essay",     essayRate * 3],
     ["narrative",          narrativeRate * 2.5],
     ["reflective",         reflectiveRate * 2],
@@ -5181,14 +5161,13 @@ function classifyGenre(text: string, words: string[]): GenreProfile {
   const confidence = Math.min(1, topScore / 10);
 
   const descriptions: Record<GenreType, string> = {
-    technical:          "Technical / code-heavy content",
-    research_abstract:  "Research paper abstract (IMRaD-structured)",
-    academic_essay:     "Academic argumentative essay",
-    narrative:          "Narrative / creative writing",
-    reflective:         "Reflective journal / personal essay",
-    lab_report:         "Laboratory or research report",
-    thesis_conclusion:  "Thesis/research conclusion chapter",
-    general:            "General prose",
+    technical: "Technical / code-heavy content",
+    academic_essay: "Academic argumentative essay",
+    narrative: "Narrative / creative writing",
+    reflective: "Reflective journal / personal essay",
+    lab_report: "Laboratory or research report",
+    thesis_conclusion: "Thesis/research conclusion chapter",
+    general: "General prose",
   };
 
   return { genre: topGenre, confidence, description: descriptions[topGenre] };
@@ -5256,13 +5235,10 @@ function ratePerThousandWords(hitCount: number, wordCount: number): number {
 }
 
 // Model version metadata (Improvement #20)
-const MODEL_VERSION = "MultiLens v4.3";
+const MODEL_VERSION = "MultiLens v4.2";
 const MODEL_DATE    = "May 2026";
-// Phase 2 gap patch (v4.3): research_abstract as distinct GenreType with IMRaD-specific signal
-// block; wired into Improvement 2 ESL guard (−6 pts, highest penalty tier) and Improvement 4
-// adversarialLabReportAbstractScore; thesis_conclusion ESL bypass conflict resolved;
-// tiered genre ESL penalties: research_abstract −6 / lab_report −5 / essay/thesis −4.
-const MODEL_SIGNALS = "53 signals · 3 engines · Phase 2 calibrated (t=40) · Platt-scaled · Genre-adaptive ESL (abstract −6/lab −5/essay −4) · Formality-gated · Adversarial-Lab/Abstract/Journal-Resistant · Abstract-Genre-Aware (v4.3)";
+// Phase 2 enhancements: t=40 threshold + genre-adaptive ESL suppression + formality calibration + adversarial lab/abstract detector + near-threshold blend tightening
+const MODEL_SIGNALS = "53 signals · 3 engines · Phase 2 calibrated (t=40) · Platt-scaled · Genre-adaptive ESL · Formality-gated · Adversarial-Lab/Abstract/Journal-Resistant";
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  IMPROVEMENT #10 — MEMOIZATION CACHE
@@ -5665,11 +5641,10 @@ function runPerplexityEngine(text: string): EngineResult {
   // ── Genre classifier (Improvement #9) ────────────────────────────────────
   const genreProfile = classifyGenre(text, words);
   // Genre-adaptive weight adjustments: technical texts have less reliable stylometric signals
-  const genreMultiplier = genreProfile.genre === "technical"         ? 0.80
-    : genreProfile.genre === "lab_report"                            ? 0.85
-    : genreProfile.genre === "reflective"                            ? 0.90
-    : genreProfile.genre === "research_abstract"                     ? 0.88  // abstracts: reliable structure signals but low per-word density; ESL −6 penalty already applied
-    : genreProfile.genre === "thesis_conclusion"                     ? 1.15  // amplify: thesis conclusions are high-risk for AI; suppress override
+  const genreMultiplier = genreProfile.genre === "technical" ? 0.80
+    : genreProfile.genre === "lab_report"        ? 0.85
+    : genreProfile.genre === "reflective"        ? 0.90
+    : genreProfile.genre === "thesis_conclusion" ? 1.15  // amplify: thesis conclusions are high-risk for AI; suppress override
     : 1.0;
 
   // ── NEW Signal 47: Nominalization Density (Thesis Conclusion) ─────────────
@@ -5839,20 +5814,12 @@ function runPerplexityEngine(text: string): EngineResult {
     // Phase 2 finding: Research Paper Abstracts (FPR 11.1%), Lab Reports (FPR ~12%),
     // and Thesis Introductions (14 of 45 Corpus D FPs) are the worst offenders when
     // the ESL gate fires. Formal registers in these genres activate vocab + transition
-    // signals even after the 70/30 blend. Apply an additional −4 to −6 pt penalty.
-    //
-    // Gap fix (v4.3): research_abstract is now a distinct GenreType (previously folded
-    // into academic_essay with low confidence, causing the confidence > 0.35 guard to
-    // fail). Penalty tiers: research_abstract −6 (highest FPR), lab_report −5, essay/thesis −4.
-    // thesis_conclusion only penalised when eslBypassActive is false (bypass takes precedence).
+    // signals even after the 70/30 blend. Apply an additional −4 to −5 pt penalty.
     const eslHighRiskGenre = genreProfile.genre === "lab_report"
-      || genreProfile.genre === "research_abstract"
-      || genreProfile.genre === "academic_essay"
-      || (genreProfile.genre === "thesis_conclusion" && !eslBypassActive);
+      || genreProfile.genre === "academic_essay"  // catches Research Paper Abstract
+      || (genreProfile.genre === "thesis_conclusion");
     if (eslHighRiskGenre && genreProfile.confidence > 0.35) {
-      const genreEslPenalty = genreProfile.genre === "research_abstract" ? 6
-        : genreProfile.genre === "lab_report" ? 5
-        : 4;
+      const genreEslPenalty = genreProfile.genre === "lab_report" ? 5 : 4;
       norm = Math.max(0, norm - genreEslPenalty);
       reliabilityWarnings.push(
         `Genre-adaptive ESL suppression applied (−${genreEslPenalty} pts): ESL gate active + ${genreProfile.description}. ` +
