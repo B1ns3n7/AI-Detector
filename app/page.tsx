@@ -5844,12 +5844,21 @@ function runPerplexityEngine(text: string): EngineResult {
     // Gap fix (v4.3): research_abstract is now a distinct GenreType (previously folded
     // into academic_essay with low confidence, causing the confidence > 0.35 guard to
     // fail). Penalty tiers: research_abstract −6 (highest FPR), lab_report −5, essay/thesis −4.
-    // thesis_conclusion only penalised when eslBypassActive is false (bypass takes precedence).
+    // thesis_conclusion: eslBypassActive is declared later in the function (line ~5906);
+    // we cannot reference it here. Instead we include thesis_conclusion in the genre set
+    // and skip the penalty inside the if-block if the bypass is active (checked at that point
+    // via a re-evaluation of the same conditions — isThesisConclusion + zero-L1-transfer).
     const eslHighRiskGenre = genreProfile.genre === "lab_report"
       || genreProfile.genre === "research_abstract"
       || genreProfile.genre === "academic_essay"
-      || (genreProfile.genre === "thesis_conclusion" && !eslBypassActive);
+      || genreProfile.genre === "thesis_conclusion";
     if (eslHighRiskGenre && genreProfile.confidence > 0.35) {
+      // thesis_conclusion bypass: if this is a thesis conclusion with zero L1-transfer,
+      // the ESL penalty is suppressed (same logic as eslBypassActive below — evaluated
+      // inline here because eslBypassActive is not yet in scope at this point).
+      const thesisEslBypass = genreProfile.genre === "thesis_conclusion" &&
+        detectThesisGenre(text, sentences).detectedMarkers.includes("zero-L1-transfer");
+      if (!thesisEslBypass) {
       const genreEslPenalty = genreProfile.genre === "research_abstract" ? 6
         : genreProfile.genre === "lab_report" ? 5
         : 4;
@@ -5858,6 +5867,7 @@ function runPerplexityEngine(text: string): EngineResult {
         `Genre-adaptive ESL suppression applied (−${genreEslPenalty} pts): ESL gate active + ${genreProfile.description}. ` +
         `Phase 2 finding: formal genre + ESL gate combination produces systematic FP; genre-specific suppression corrects blend leakage.`
       );
+      } // end !thesisEslBypass
     }
 
     // ── IMPROVEMENT 5 (Phase 2): Near-threshold blend tightening (35–54 zone) ─
