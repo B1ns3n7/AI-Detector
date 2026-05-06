@@ -12,10 +12,11 @@ import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 //  6. Real-time Monitoring Dashboard (in-session volume tracking + drift)
 //
 //  PERFORMANCE UPDATE — 2026-05 (Phase 2 ROC analysis)
-//  7. Threshold change: rocThreshold default 15 → 35 → 40 (Phase 2 corpus-weighted optimum)
-//     Per Phase 2 testing (MultiLens_Phase2_Testing.xlsx + multilens_phase2_analysis.html):
-//       t=40 → FPR_A 8.3%→3.0%, FNR_B 0.5%→0.0%, FPR_D 30%→14%, F1 93.9%→93.0%
-//       t=35 was tuned only on Corpus A+B; t=40 is optimal across all 4 corpora.
+//  7. Threshold change: rocThreshold default 15 → 35 (ROC-optimal operating point)
+//     Per Phase 2 testing (MultiLens_Phase2_Testing.xlsx, Sheet 5):
+//       t=35 → TPR 62.5%, FPR 0.111  (was: t=50 → TPR 25%, FPR 0.000)
+//       FPR on Corpus A (Filipino/ESL human) remains 0 at t=35 — primary claim holds.
+//       Projected accuracy improvement: 64.7% → ~76.5%
 //  8. ExperimentRun schema v2: added `threshold` + `signalVersion` fields so
 //     Experiment Tracking Panel can correctly label and compare historical runs.
 //  9. Batch results table: three-zone verdict display (Human / Needs Review / AI-Generated)
@@ -23,32 +24,6 @@ import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 // 10. Word-count reliability badge: texts under 150 words flagged with ⚠ in
 //     batch results table — TTR, hapax, and moving-window signals inactive below
 //     this length. Score is less reliable; reviewer should treat as indicative only.
-//
-//  PHASE 2 ALGORITHM ENHANCEMENTS (multilens_phase2_analysis.html)
-//  Projected combined impact (t=40 + improvements 2–5): FPR_A=1.3%, FNR_B=0.0%,
-//  FNR_C=5.0%, FPR_D=7.3%, F1=96.4% (baseline: 93.9%)
-//
-// 11. Genre-adaptive ESL suppression (Improvement 2): when ESL gate fires AND genre
-//     is Research Paper Abstract / Lab Report / Thesis Introduction, apply an
-//     additional −4 to −5 pt penalty. Phase 2: these genres produce the most FPs
-//     at current blend weights (Research Paper Abstract FPR 11.1%, Lab Report ~12%).
-// 12. Formality calibration for native-English writers (Improvement 3): when ESL
-//     gate does NOT fire AND text has formal academic register + human-typical
-//     burstiness (CV ≥ 0.32) AND score in 35–62 cluster, apply −12 pt calibration.
-//     Phase 2: Corpus D FPR was 30% (45/150 native human texts flagged); this
-//     targets the Thesis Introduction FP cluster (14 of 45 FPs).
-//     Projected: FPR_D 30% → 13.3%.
-// 13. Adversarial Lab Report / Abstract detector (Improvement 4): extends the
-//     adversarial reflective journal logic (lines 4382–4403) to cover Lab Reports
-//     and Research Paper Abstracts. Detects: passivity saturation (passive rate
-//     ≥ 0.65), absent procedural specificity, generic entity placeholders, formulaic
-//     section openers, over-hedged conclusions without numeric outcomes.
-//     Phase 2: 4 Lab Reports + ~4 Abstracts = 8 of 15 Corpus C evasions.
-//     Projected: FNR_C 15% → ~2%.
-// 14. Near-threshold ESL blend tightening (Improvement 5): when ESL gate is active
-//     AND combined score falls in 35–54 boundary zone, shift blend from 70/30 to
-//     80/20 (ESL-safe/full-signal). Phase 2: all 25 Corpus A FPs land in 35–54
-//     range while ESL gate is active. Projected: FPR_A 8.3% → 3.3%.
 // ═══════════════════════════════════════════════════════════════════════════════
 //---------------------------------------
 // ── Dataset & Evaluation Types ───────────────────────────────────────────────
@@ -4530,127 +4505,6 @@ function adversarialReflectiveJournalScore(text: string, sentences: string[], wc
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  IMPROVEMENT 4 (Phase 2) — ADVERSARIAL LAB REPORT / RESEARCH PAPER ABSTRACT DETECTION
-//  Phase 2 finding: of 15 Corpus C evasions, 4 are Lab Reports and the rest include
-//  Research Paper Abstracts. The ESL gate fires on 13 of 15 adversarial samples,
-//  fully suppressing their scores below the threshold. The reflective journal
-//  detector (above) doesn't cover these genres, leaving them with NO adversarial
-//  countermeasure.
-//
-//  Lab Report / Abstract adversarial pattern (AI evading the ESL gate):
-//    (a) Passivity saturation — AI lab reports are passive-voice-saturated but
-//        the passive voice signal is partially suppressed by the ESL gate.
-//        Genuine ESL lab reports have SOME active voice; AI lab reports rarely do.
-//    (b) Absent procedural specificity — human lab reports name exact instruments,
-//        chemical concentrations, equipment model numbers, cell line IDs, etc.
-//        AI lab reports use generic procedural language ("a standard procedure",
-//        "appropriate equipment", "the sample was prepared").
-//    (c) Generic entity placeholders — AI uses "the sample", "the apparatus",
-//        "the solution" without specific identifiers that a real experiment would have.
-//    (d) Uniform section discourse markers — AI lab reports have formulaic section
-//        openers: "This study aims to...", "The results show that...", "It was found
-//        that...", "The purpose of this experiment..." even when no explicit headers.
-//    (e) For Abstracts: over-hedged conclusions + no specific numeric results
-//        (human abstracts report exact p-values, concentrations, percentages).
-//
-//  Score: 0–30 (AI signal; high score means it's likely AI faking a lab/abstract)
-//  Applied as a +8 point boost when ESL gate fires + genre = lab_report or academic_essay.
-// ─────────────────────────────────────────────────────────────────────────────
-
-function adversarialLabReportAbstractScore(text: string, sentences: string[], wc: number, genre: string): {
-  score: number;
-  isLabOrAbstract: boolean;
-  adversarialSignals: string[];
-  authenticitySignals: string[];
-  details: string;
-} {
-  if (wc < 60) return { score: 0, isLabOrAbstract: false, adversarialSignals: [], authenticitySignals: [], details: "Text too short." };
-
-  // ── Step 1: Is this a lab report or research abstract? ─────────────────────
-  const labMarkers = (text.match(/\b(experiment|apparatus|specimen|reagent|titration|distillation|centrifuge|absorbance|wavelength|transmittance|beaker|flask|pipette|burette|microscope|incubation|pH|mol|molar|concentration|solution|compound|element|reaction|catalyst|substrate|electrode|voltage|current|resistance|circuit|frequency|amplitude|datum|data (was|were) (collected|recorded|analyzed|obtained|processed)|the (sample|specimen|solution|mixture|compound|substance) (was|were)|materials and methods|procedure|results and discussion|conclusion|hypothesis|null hypothesis|alternative hypothesis|independent variable|dependent variable|control group|experimental group|standard deviation|mean ± |p[- ]value|statistical(ly)? significant|confidence interval)\b/gi) || []).length;
-
-  const abstractMarkers = (text.match(/\b(this (study|paper|research|article|investigation) (aims?|seeks?|investigates?|examines?|explores?|presents?|proposes?|analyzes?|evaluates?|assesses?|demonstrates?|shows?|reveals?|provides?)|the (purpose|objective|aim|goal) of this (study|research|paper|investigation|work)|we (present|propose|examine|investigate|analyze|evaluate|assess|demonstrate|show|report|describe)|the (results?|findings?|analysis|data|evidence) (show|suggest|indicate|reveal|demonstrate|confirm)|keywords?:|abstract:|in (this|the present) (study|paper|research|investigation)|this (work|study) contributes?|the proposed (method|model|approach|framework|system|algorithm))\b/gi) || []).length;
-
-  const isLabOrAbstract = (labMarkers >= 3) || (abstractMarkers >= 2) || genre === "lab_report" || genre === "academic_essay";
-  if (!isLabOrAbstract) {
-    return { score: 0, isLabOrAbstract: false, adversarialSignals: [], authenticitySignals: [], details: "Text not classified as lab report or research abstract — adversarial lab/abstract check skipped." };
-  }
-
-  const adversarialSignals: string[] = [];
-  const authenticitySignals: string[] = [];
-
-  // ── Step 2: Authenticity signals (REDUCE adversarial score) ────────────────
-
-  // Specific numeric results (human lab reports / abstracts have real numbers)
-  const specificNumerics = (text.match(/\b(\d+\.?\d*\s*(mg|mL|g|L|nm|μm|mm|cm|m|°C|K|Pa|kPa|MPa|N|J|W|V|A|Hz|kHz|MHz|rpm|ppm|ppb|%|mol\/L|g\/mol|M\s+(?:HCl|NaOH|H2SO4|NaCl)|±\s*\d+\.?\d*|p\s*[<>=]\s*0\.\d+|n\s*=\s*\d+|r\s*=\s*[-]?\d+\.\d+|R²\s*=\s*\d+\.\d+|F\(\d+,\s*\d+\)\s*=\s*\d+\.\d+))\b/gi) || []).length;
-  if (specificNumerics >= 3) authenticitySignals.push(`specific numeric results (${specificNumerics})`);
-
-  // Named instruments / specific equipment models
-  const specificEquipment = (text.match(/\b([A-Z][a-z]+ (Model|Series|Type) [A-Z0-9\-]+|UV[- ]Vis|HPLC|GC[- ]MS|NMR|FTIR|AAS|ICP[- ]OES|SEM|TEM|XRD|Thermo|Shimadzu|Agilent|PerkinElmer|Bio-Rad|Sigma[- ]Aldrich|Merck|Fisher Scientific|[A-Z]{2,}[-\s]\d{3,})\b/g) || []).length;
-  if (specificEquipment >= 1) authenticitySignals.push(`specific equipment/brand references (${specificEquipment})`);
-
-  // Named chemicals with CAS or specific identifiers
-  const namedChemicals = (text.match(/\b(sodium (chloride|hydroxide|bicarbonate|carbonate|sulfate|phosphate)|potassium (permanganate|dichromate|chloride|nitrate)|hydrochloric acid|sulfuric acid|nitric acid|acetic acid|ethanol|methanol|acetone|chloroform|benzene|toluene|glucose|sucrose|agar|phosphate buffer saline|PBS|DMEM|RPMI|Tris[- ]HCl|EDTA|SDS|PCR|qPCR|ELISA|western blot|flow cytometry|cell line [A-Z][A-Z0-9\-]+|strain [A-Z]{2,}[0-9\-]+)\b/gi) || []).length;
-  if (namedChemicals >= 2) authenticitySignals.push(`named specific chemicals/reagents (${namedChemicals})`);
-
-  // Negative or null results (AI lab reports always "succeed")
-  const negativeResults = (text.match(/\b(no significant (difference|effect|change|correlation|relationship|association|improvement)|not significant(ly)?|failed to (show|demonstrate|produce|achieve|detect|establish)|null (hypothesis (was|is) (not rejected|accepted)|result)|inconclusive|no (statistical|measurable|observable|detectable) (significance|difference|effect|change|variation|correlation)|the (treatment|intervention|method|procedure) (did not|was not) (significantly|statistically)|contrary to (our|the) (hypothesis|expectation|prediction))\b/gi) || []).length;
-  if (negativeResults >= 1) authenticitySignals.push(`negative/null result reporting (${negativeResults})`);
-
-  // ── Step 3: Adversarial signals (AI faking a lab report / abstract) ────────
-
-  // Passivity saturation: AI lab reports are passive-voice-saturated
-  const passiveInstances = (text.match(/\b(is|are|was|were|has been|have been|had been|will be|can be|could be|may be|might be|should be|must be|would be)\s+(being\s+)?[a-z]{3,}(ed|en|t)\b/gi) || []).length;
-  const passiveRate = passiveInstances / Math.max(sentences.length, 1);
-  // ESL human lab reports: passive rate ~0.3–0.5; AI lab reports: ~0.65–0.85
-  if (passiveRate >= 0.65) adversarialSignals.push(`passive-voice saturation (${passiveInstances} instances, rate ${passiveRate.toFixed(2)}/sentence — AI lab reports rarely use active voice)`);
-  else if (passiveRate >= 0.55) adversarialSignals.push(`elevated passive rate (${passiveRate.toFixed(2)}/sentence)`);
-
-  // Absent procedural specificity — AI uses generic procedural language
-  const genericProcedure = (text.match(/\b(a standard (procedure|protocol|method|technique|approach)|appropriate (equipment|apparatus|instruments?|tools?|materials?|conditions?)|the (sample|specimen|solution|mixture|material|substance) (was|were) prepared|the experiment (was|were) conducted|the procedure (was|were) followed|as (described|outlined|specified) (in|by|above|below|previously)|following (standard|established|conventional|typical|usual|common|accepted) (protocol|procedure|method|practice)|in accordance with (the|standard|established) (protocol|procedure|guidelines?))\b/gi) || []).length;
-  if (genericProcedure >= 3) adversarialSignals.push(`absent procedural specificity — generic procedure language (${genericProcedure} instances)`);
-  else if (genericProcedure >= 2) adversarialSignals.push(`generic procedure language (${genericProcedure} instances)`);
-
-  // Generic entity placeholders — AI uses "the sample", "the solution", "the apparatus"
-  const genericLabEntities = (text.match(/\b(the (sample|solution|mixture|compound|substance|specimen|apparatus|equipment|instrument|material|reagent|chemical|test (tube|subject|group|sample))(?:\s+(?:was|were|had|has|is|are|showed|showed|indicated|revealed|demonstrated|produced|gave|yielded))\b)/gi) || []).length;
-  if (genericLabEntities >= 4) adversarialSignals.push(`generic entity placeholders (${genericLabEntities} — no specific identifiers)`);
-
-  // Formulaic section discourse markers (AI lab reports have formulaic structure even without headers)
-  const formulaicLabOpeners = sentences.filter(s => {
-    const opener = s.trim().slice(0, 100);
-    return /^(This (study|experiment|research|paper|investigation|work) (aims?|seeks?|investigates?|examines?|was conducted|was designed|was performed|was carried out|was undertaken)|The (purpose|objective|aim|goal) of this|The (results?|findings?|data|analysis|evidence) (show|suggest|indicate|demonstrate|reveal|confirm) that|It (was|has been) (found|observed|noted|determined|established|shown|demonstrated) that|The (experiment|procedure|study|research) (was|were|has been) (conducted|performed|carried out|undertaken|completed|designed|implemented))/i.test(opener);
-  }).length;
-  if (formulaicLabOpeners >= 2) adversarialSignals.push(`formulaic section openers (${formulaicLabOpeners})`);
-
-  // For abstracts: over-hedged conclusions with no specific numeric outcome
-  const overHedgedConclusion = (text.match(/\b(the (study|research|findings?|results?) (suggest|indicate|imply|demonstrate|show) that .{0,60}(may|might|could|would|can) (help|improve|enhance|contribute|benefit|facilitate|promote|support|enable|provide|offer)|it (can|may|might|could|should) be (concluded|suggested|noted|inferred|argued) that|these (findings?|results?) (have|may have) (important|significant|potential|practical) (implications?|applications?|relevance))\b/gi) || []).length;
-  const hasConcreteOutcome = specificNumerics >= 2;
-  if (overHedgedConclusion >= 2 && !hasConcreteOutcome) {
-    adversarialSignals.push(`over-hedged conclusion without numeric outcomes (${overHedgedConclusion} vague conclusion phrases, 0 specific results)`);
-  }
-
-  // ── Step 4: Compute score ──────────────────────────────────────────────────
-  const adversarialWeight = adversarialSignals.length * 7;
-  const authenticityPenalty = authenticitySignals.length * 6;
-  let rawScore = Math.max(0, adversarialWeight - authenticityPenalty);
-
-  // Boost: passivity saturation alone is very strong for lab reports
-  if (passiveRate >= 0.65 && genericProcedure >= 2 && authenticitySignals.length === 0) {
-    rawScore = Math.min(30, rawScore + 8);
-  }
-
-  const score = Math.min(30, rawScore);
-
-  const details = score > 0
-    ? `Adversarial lab report/abstract detected (score: ${score}/30). Genre: ${genre === "lab_report" ? "lab report" : "research abstract/academic"} (labMarkers=${labMarkers}, abstractMarkers=${abstractMarkers}). Adversarial signals: ${adversarialSignals.join("; ")}. Authenticity signals: ${authenticitySignals.length > 0 ? authenticitySignals.join("; ") : "none detected"}. Phase 2 finding: 4 Lab Reports and multiple Research Paper Abstracts evaded detection via the ESL gate with passive-voice saturation + absent procedural specificity + generic entity placeholders.`
-    : isLabOrAbstract
-      ? `Lab report/abstract — no adversarial pattern detected. Authenticity signals: ${authenticitySignals.length > 0 ? authenticitySignals.join("; ") : "standard profile"}.`
-      : "Not classified as lab report or research abstract.";
-
-  return { score, isLabOrAbstract, adversarialSignals, authenticitySignals, details };
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 //  PRIORITY 3 — MULTI-LLM ADVERSARIAL ESL FINGERPRINTS
 //  Phase 1 finding: C-002 was Gemini 1.5 Pro. The existing family fingerprints
 //  detect each LLM's STANDARD output patterns. When prompted to write in ESL
@@ -5237,8 +5091,7 @@ function ratePerThousandWords(hitCount: number, wordCount: number): number {
 // Model version metadata (Improvement #20)
 const MODEL_VERSION = "MultiLens v4.2";
 const MODEL_DATE    = "May 2026";
-// Phase 2 enhancements: t=40 threshold + genre-adaptive ESL suppression + formality calibration + adversarial lab/abstract detector + near-threshold blend tightening
-const MODEL_SIGNALS = "53 signals · 3 engines · Phase 2 calibrated (t=40) · Platt-scaled · Genre-adaptive ESL · Formality-gated · Adversarial-Lab/Abstract/Journal-Resistant";
+const MODEL_SIGNALS = "53 signals · 3 engines · Deterministic · Platt-calibrated · Genre-adaptive · ESL Fluency-Stratified · Adversarial-Journal-Resistant";
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  IMPROVEMENT #10 — MEMOIZATION CACHE
@@ -5809,39 +5662,6 @@ function runPerplexityEngine(text: string): EngineResult {
     // but the full signal set retains 30% weight so strong AI vocab/transition
     // patterns (which ESL writers genuinely don't produce) are not entirely discarded.
     norm = eslSafeNorm * 0.70 + norm * 0.30;
-
-    // ── IMPROVEMENT 2 (Phase 2): Genre-adaptive ESL suppression ──────────────
-    // Phase 2 finding: Research Paper Abstracts (FPR 11.1%), Lab Reports (FPR ~12%),
-    // and Thesis Introductions (14 of 45 Corpus D FPs) are the worst offenders when
-    // the ESL gate fires. Formal registers in these genres activate vocab + transition
-    // signals even after the 70/30 blend. Apply an additional −4 to −5 pt penalty.
-    const eslHighRiskGenre = genreProfile.genre === "lab_report"
-      || genreProfile.genre === "academic_essay"  // catches Research Paper Abstract
-      || (genreProfile.genre === "thesis_conclusion");
-    if (eslHighRiskGenre && genreProfile.confidence > 0.35) {
-      const genreEslPenalty = genreProfile.genre === "lab_report" ? 5 : 4;
-      norm = Math.max(0, norm - genreEslPenalty);
-      reliabilityWarnings.push(
-        `Genre-adaptive ESL suppression applied (−${genreEslPenalty} pts): ESL gate active + ${genreProfile.description}. ` +
-        `Phase 2 finding: formal genre + ESL gate combination produces systematic FP; genre-specific suppression corrects blend leakage.`
-      );
-    }
-
-    // ── IMPROVEMENT 5 (Phase 2): Near-threshold blend tightening (35–54 zone) ─
-    // Phase 2 finding: all 25 Corpus A FPs land between scores 35–54 while the ESL
-    // gate is active. The 30% full-signal weight is the proximate cause. In this
-    // specific boundary zone, shift blend to 80/20 to suppress residual leakage
-    // without affecting high-confidence AI detections (≥ 65).
-    const blendedCandidate = eslSafeNorm * 0.70 + norm * 0.30; // already applied above
-    if (norm >= 35 && norm <= 54) {
-      // Recompute with tighter 80/20 blend for this zone only
-      const tighterBlend = eslSafeNorm * 0.80 + norm * 0.20;
-      norm = tighterBlend;
-      reliabilityWarnings.push(
-        `Near-threshold ESL blend tightened to 80/20 (score in 35–54 boundary zone). ` +
-        `Phase 2 finding: the 30% full-signal weight is responsible for all 25 Corpus A false positives in this range.`
-      );
-    }
   }
 
   // Improvement 5: differentiated warning penalties — only suppress signals correlated with each warning type
@@ -5899,64 +5719,6 @@ function runPerplexityEngine(text: string): EngineResult {
     reliabilityWarnings.push("Thesis conclusion genre detected with zero L1-transfer features — ESL calibration suppressed. AI-polished conclusions show no ESL markers precisely because they were written/edited by an LLM. Score not reduced for Philippine academic context in this genre.");
   }
 
-  if (eslScorePenalty > 0) {
-    norm = Math.max(0, norm - eslScorePenalty);
-  }
-  if (eslBypassActive) {
-    reliabilityWarnings.push("Thesis conclusion genre detected with zero L1-transfer features — ESL calibration suppressed. AI-polished conclusions show no ESL markers precisely because they were written/edited by an LLM. Score not reduced for Philippine academic context in this genre.");
-  }
-
-  // ── IMPROVEMENT 3 (Phase 2): Formality calibration for native-English writers ─
-  // Phase 2 finding: Corpus D FPR = 30% (45/150 native English human texts flagged).
-  // The ESL gate does NOT fire on native writers, so formal academic vocabulary and
-  // transition phrases hit Engine A unmitigated. Thesis introductions are the worst
-  // offender (14 of 45 FPs). This is a validity problem: a reviewer can point to it
-  // and say the detector has a general formal-writing problem, not just an ESL problem.
-  //
-  // Mechanism: when Gate 1 does NOT fire (no ESL markers) AND the text has formal
-  // academic register signals (high nom density, high transition count, hedging) AND
-  // burstiness CV is ABOVE the human-typical range (meaning rhythm is actually varied
-  // — not the metronomic AI pattern), apply a downward calibration of ~12 points.
-  // This targets the 35–55 score cluster where native formal writing accumulates.
-  //
-  // Safety: do NOT apply when Engine B shows strong AI burstiness signal (cv < 0.28),
-  // because that would suppress true AI detections. Only fire when CV indicates
-  // natural rhythm variation (human-typical burstiness) combined with formal vocab.
-  if (!eslFlag && !eslBypassActive) {
-    // Detect formal academic register without ESL markers = likely native formal human
-    const formalTransitionHits = (text.match(/\b(furthermore|moreover|nevertheless|nonetheless|consequently|subsequently|accordingly|therefore|thus|hence|in addition|in contrast|on the other hand|notwithstanding|hitherto|heretofore|insofar as|inasmuch as|to this end|with respect to|with regard to|in terms of|in light of|in view of|it is worth noting|it should be noted|it is important to note|as evidenced by|as demonstrated by)\b/gi) || []).length;
-    const formalNominalizations = (text.match(/\b\w+(tion|sion|ment|ance|ence|ity|ness|ism|ize|ization|isation)\b/gi) || []).length;
-    const formalNomRate = formalNominalizations / Math.max(wc, 1);
-    const hedgingHits = (text.match(/\b(may|might|could|would|should|perhaps|possibly|arguably|seemingly|apparently|ostensibly|it is suggested|it is proposed|it has been argued|this suggests|this indicates|this implies|evidence suggests|research indicates|studies show)\b/gi) || []).length;
-    const hedgingRate = hedgingHits / Math.max(sentences.length, 1);
-
-    // Formal academic register: many transitions + high nominalization rate + hedging
-    const isFormalAcademic = formalTransitionHits >= 4 && formalNomRate >= 0.10 && hedgingRate >= 0.3;
-
-    // Sentence length CV from the text (proxy for burstiness — human-typical CV ≥ 0.35)
-    const sentLens = sentences.map(s => s.trim().split(/\s+/).length);
-    const sentAvg = sentLens.reduce((a, b) => a + b, 0) / Math.max(sentLens.length, 1);
-    const sentVariance = sentLens.reduce((s, l) => s + Math.pow(l - sentAvg, 2), 0) / Math.max(sentLens.length, 1);
-    const sentCV = Math.sqrt(sentVariance) / Math.max(sentAvg, 1);
-
-    // Only apply calibration when rhythm is human-typical (cv ≥ 0.32) — not metronomic AI
-    const hasHumanBurstiness = sentCV >= 0.32 && sentences.length >= 8;
-
-    // Score is in the Corpus D cluster (35–62): formal writing accumulates here
-    const inFormalCluster = norm >= 35 && norm <= 62;
-
-    if (isFormalAcademic && hasHumanBurstiness && inFormalCluster) {
-      const formalityCalibrationPenalty = 12;
-      norm = Math.max(0, norm - formalityCalibrationPenalty);
-      reliabilityWarnings.push(
-        `Formality calibration applied (−${formalityCalibrationPenalty} pts): native-English formal academic register detected without ESL markers. ` +
-        `Formal transitions: ${formalTransitionHits}, nominalization rate: ${(formalNomRate * 100).toFixed(1)}%, hedging rate: ${hedgingRate.toFixed(2)}/sentence, sentence CV: ${sentCV.toFixed(2)} (human-typical rhythm). ` +
-        `Phase 2 finding: Corpus D FPR was 30% because native formal academic prose triggers vocabulary + transition signals unmitigated by the ESL gate. ` +
-        `Calibration suppressed because burstiness (CV=${sentCV.toFixed(2)}) indicates human rhythm variation — AI text at this formality level is metronomic (CV < 0.28).`
-      );
-    }
-  }
-
   // ── PRIORITY 2: Adversarial reflective journal detection ────────────────────
   // Phase 1 finding: C-002 (Gemini reflective journal) bypassed the ESL gate by
   // mimicking personal anecdote markers. This sub-classifier specifically targets
@@ -5969,32 +5731,6 @@ function runPerplexityEngine(text: string): EngineResult {
     const adversarialBoost = Math.round(reflJournalResult.score * 0.6); // 60% of adversarial score added
     norm = Math.min(100, norm + adversarialBoost);
     reliabilityWarnings.push(`Adversarial reflective journal signals detected (score: ${reflJournalResult.score}/30): ${reflJournalResult.adversarialSignals.slice(0, 3).join("; ")}. Phase 1 finding: this pattern targets Gemini/LLM-generated personal narratives that use generic entity placeholders and formulaic lesson extraction to evade the ESL gate.`);
-  }
-
-  // ── IMPROVEMENT 4 (Phase 2): Adversarial Lab Report / Research Paper Abstract ──
-  // Phase 2 finding: 4 Lab Reports + multiple Research Paper Abstracts = 8 of 15
-  // Corpus C evasions. ESL gate suppresses scores but no adversarial countermeasure
-  // existed for these genres. Passivity saturation + absent procedural specificity +
-  // generic entity placeholders → extending the detector drops FNR_C from 15% to ~2%.
-  const labAbstractResult = adversarialLabReportAbstractScore(text, sentences, wc, genreProfile.genre);
-  if (labAbstractResult.isLabOrAbstract && labAbstractResult.score > 0) {
-    const boostScale = labAbstractResult.score >= 20 ? 1.0 : labAbstractResult.score >= 10 ? 0.6 : 0.4;
-    const labAdversarialBoost = Math.round(8 * boostScale + labAbstractResult.score * 0.35);
-    if (eslFlag) {
-      norm = Math.min(100, norm + labAdversarialBoost);
-      reliabilityWarnings.push(
-        `Adversarial lab/abstract signals detected (score: ${labAbstractResult.score}/30, boost: +${labAdversarialBoost} pts): ` +
-        `${labAbstractResult.adversarialSignals.slice(0, 3).join("; ")}. ` +
-        `Phase 2: ESL gate was suppressing AI lab reports/abstracts using passivity saturation + generic procedure language. Score partially restored.`
-      );
-    } else {
-      const reducedBoost = Math.round(labAdversarialBoost * 0.5);
-      norm = Math.min(100, norm + reducedBoost);
-      reliabilityWarnings.push(
-        `Adversarial lab/abstract pattern detected (score: ${labAbstractResult.score}/30, boost: +${reducedBoost} pts): ` +
-        `${labAbstractResult.adversarialSignals.slice(0, 2).join("; ")}.`
-      );
-    }
   }
 
   // ── PRIORITY 3: Adversarial LLM fingerprints ────────────────────────────────
@@ -9741,11 +9477,7 @@ function DatasetEvaluationPanel({
   //    FPR on Corpus A (Filipino/ESL human) remains at or near 0 because
   //    all Corpus A calibrated scores fell between 17.5–35.0.
   //    Previously 15 — updated to 35 to match the ROC-optimal operating point.
-  // IMPROVEMENT 1 (Phase 2): Raise default threshold 35 → 40.
-  // At t=40: FPR_A 8.3%→3.0%, FPR_D 30%→14%, FNR_B 0.5%→0.0%, F1 93.9%→93.0%.
-  // The threshold was previously tuned only on Corpus A+B. t=40 is the
-  // corpus-weighted optimum across all four corpora simultaneously.
-  const [rocThreshold, setRocThreshold] = useState(40);
+  const [rocThreshold, setRocThreshold] = useState(35);
 
   const handleFile = async (file: File) => {
     setError(""); setRows([]); setResults(null);
@@ -9958,7 +9690,7 @@ function DatasetEvaluationPanel({
                   </thead>
                   <tbody>
                     {results.map(r => {
-                      // ── Three-zone verdict logic (Phase 2 ROC-optimal t=40) ──────────────────
+                      // ── Three-zone verdict logic (ROC-optimal t=35) ──────────────────
                       // Zone 1: score ≥ rocThreshold (default 35) → AI-Flagged
                       // Zone 2: score 35–(rocThreshold-1) → Needs Human Review
                       //         (only applies when user has moved slider above 35)
