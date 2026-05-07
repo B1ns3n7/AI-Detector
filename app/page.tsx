@@ -10727,7 +10727,7 @@ export default function DetectorPage() {
       const shift = e.shiftKey;
 
       // F12 — open DevTools
-      if (e.key === "F12") { e.preventDefault(); return false; }
+      //if (e.key === "F12") { e.preventDefault(); return false; }
 
       // Ctrl+Shift+I / Cmd+Option+I — Inspector
       if (ctrl && shift && (e.key === "I" || e.key === "i")) { e.preventDefault(); return false; }
