@@ -83,9 +83,12 @@ export async function POST(req: NextRequest) {
     });
 
   } catch (e: any) {
-    // Timeout or network error
+    // Timeout or network error — log details for Vercel function logs
+    const msg = e?.message ?? "unknown error";
+    console.error("[neural-analyze] Perplexity service error:", msg);
+    console.error("[neural-analyze] PERPLEXITY_SERVICE_URL:", process.env.PERPLEXITY_SERVICE_URL ?? "NOT SET");
     return NextResponse.json(
-      { error: `Perplexity service unreachable: ${e?.message ?? "unknown error"}` },
+      { error: `Perplexity service unreachable: ${msg}` },
       { status: 503 }
     );
   }
@@ -97,14 +100,35 @@ export async function POST(req: NextRequest) {
  * Adjust this function if your system prompt format changes.
  */
 function extractRawText(content: string): string {
-  // If the content contains a clear delimiter like "TEXT TO ANALYZE:" or
-  // similar, extract just the text portion. Otherwise use the full content.
-  const delimiter = /text to analyze[:\-]\s*/i;
-  const parts = content.split(delimiter);
-  if (parts.length > 1) {
-    return parts[parts.length - 1].trim();
+  // USER_PROMPT format from page.tsx runNeuralEngine():
+  //   "[optional engine context block]
+Analyze this text:
+
+<actual text>"
+  //   or for sliding-window: "[DOCUMENT HEAD — first N words]
+<text>
+
+[DOCUMENT TAIL...]"
+  //
+  // We extract only the raw text portion — the perplexity service does not
+  // need the engine context block or the "Analyze this text:" instruction.
+
+  // Pattern 1: "Analyze this text:
+
+<text>"  (standard)
+  const analyzeMatch = content.match(/Analyze this text:\s*
++([\s\S]+)$/i);
+  if (analyzeMatch) {
+    return analyzeMatch[1].trim();
   }
 
-  // Fallback: return full content (perplexity service handles long inputs)
+  // Pattern 2: sliding-window format starting with [DOCUMENT HEAD...]
+  const headMatch = content.match(/\[DOCUMENT HEAD[^\]]*\]\s*
++([\s\S]+)$/i);
+  if (headMatch) {
+    return headMatch[1].trim();
+  }
+
+  // Fallback: return full content
   return content.trim();
 }
