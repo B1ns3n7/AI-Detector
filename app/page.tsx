@@ -899,7 +899,7 @@ async function generatePDFReport(
   sf("bold", 20, C.white);
   tx("AI Content Detection Report", ML, 17);
   sf("normal", 8, C.s400);
-  tx("Perplexity & Stylometry  ·  Burstiness & Cognitive  ·  Neural Perplexity  ·  MTLD  ·  Idea Repetition  ·  Bimodal Distribution  ·  ESL Calibration", ML, 26);
+  tx("Perplexity & Stylometry  ·  Burstiness & Cognitive  ·  GPT-2 Binoculars  ·  MTLD  ·  Idea Repetition  ·  Bimodal Distribution  ·  ESL Calibration", ML, 26);
   const dateStr = now.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
   const timeStr = now.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
   sf("normal", 7.5, C.s400);
@@ -1354,7 +1354,7 @@ async function generatePDFReport(
   if (burstResult) drawEngineSection("Burstiness & Cognitive Markers", C.green, "BC", "Sentence length variation (CV), rhetorical devices, short-sentence presence, contraction signals.",  "Sentence Burstiness (CV)",         burstResult);
   if (neuralResult) {
     const violetRGB: RGB = [124, 58, 237];
-    drawEngineSection("Neural Perplexity", violetRGB, "NP", "True token-level perplexity (GPT-2 Binoculars): raw perplexity scoring, cross-perplexity ratio, per-sentence AI probability, structural uniformity, DetectGPT perturbation resistance, bimodal sentence distribution (mixed authorship), ESL/Philippine calibration.", "Token Predictability + Semantic Smoothness + Perturbation Resistance", neuralResult);
+    drawEngineSection("GPT-2 Binoculars", violetRGB, "NP", "True token-level perplexity (GPT-2 scorer + GPT-2-medium reference). Binoculars cross-perplexity ratio, per-sentence AI probability, structural uniformity, perturbation resistance, bimodal sentence distribution (mixed authorship), ESL/Philippine calibration.", "Token Predictability + Semantic Smoothness + Perturbation Resistance", neuralResult);
   }
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -1373,7 +1373,7 @@ async function generatePDFReport(
     const engines = [
       { name: "Perplexity & Stylometry",       col: C.navy,              res: perpResult  },
       { name: "Burstiness & Cognitive Markers", col: C.green,             res: burstResult },
-      ...(neuralResult ? [{ name: "Neural Perplexity", col: [124, 58, 237] as RGB, res: neuralResult }] : []),
+      ...(neuralResult ? [{ name: "GPT-2 Binoculars", col: [124, 58, 237] as RGB, res: neuralResult }] : []),
     ];
     const colGap  = 4;
     const bw = (CW - colGap * (engines.length - 1)) / engines.length;
@@ -1441,7 +1441,7 @@ async function generatePDFReport(
     const guide: [string, string][] = [
       ["Perplexity & Stylometry", "Detects clusters of AI-specific vocabulary, cliche transition phrases, bigram patterns, and document-level repetition. Multiple signals must agree - a single hit does not raise the evidence level."],
       ["Burstiness & Cognitive Markers", "Measures sentence length variation (CV). Human writers naturally alternate short and long sentences (CV > 0.42); AI writes uniformly (CV < 0.22). Rhetorical devices - questions, em-dashes, parentheticals - are counted as positive human signals."],
-      ["Neural Perplexity", "True perplexity engine using GPT-2 (scorer) and GPT-2-medium (reference) via Binoculars cross-perplexity ratio. Computes real token-level log-likelihood — not LLM estimation. Catches fluent AI text and flags ESL/academic writing to reduce false positives."],
+      ["GPT-2 Binoculars", "True token-level perplexity engine using GPT-2 (scorer) and GPT-2-medium (reference). Computes real Binoculars cross-perplexity ratio — not LLM estimation. Catches fluent AI text and flags ESL/academic writing to reduce false positives."],
       ["Score breakdown (AI / Mixed / Human)", "RECALIBRATED thresholds (FPR-corrected): Likely Human < 20%, Mostly Human 20–34%, Needs Human Review 35–49% (ambiguous zone — formal/academic writing often scores here), Mixed / Uncertain 50–64%, Likely AI 65–79%, Almost Certainly AI ≥ 80%. A combined score only reaches AI territory when BOTH heuristic engines independently agree."],
       ["When engines agree", "Higher confidence. Dual-engine agreement on AI signals is required to issue any AI verdict. Agreement at Moderate level or above, with both engines firing, is treated as a strong indicator. Single-engine firing is explicitly insufficient — the result is clamped to the 'Needs Human Review' zone."],
       ["When engines disagree", "Single-engine firing is the primary source of false positives on formal human writing. The system caps the combined score at 49% when only one engine fires, routing the result to the review zone. This protects formal academic writers and ESL writers from false accusations."],
@@ -7825,7 +7825,7 @@ function RadarChart({ perpResult, burstResult, neuralResult }: {
     { label: "Structural", score: Math.min(100, ((getStr(perpResult, "Paragraph-opening") + getStr(perpResult, "Paragraph Structure")) / 2) * 1.4), color: "#8b5cf6", desc: "Document organization rigidity" },
     { label: "Stylometric", score: Math.min(100, ((getStr(perpResult, "Hedged") + getStr(perpResult, "Clause Stack")) / 2) * 1.3), color: "#3b82f6", desc: "Writing style patterns" },
     { label: "Semantic", score: Math.min(100, ((getStr(perpResult, "MTLD") + getStr(perpResult, "Semantic Self")) / 2) * 1.5), color: "#10b981", desc: "Concept diversity & repetition" },
-    { label: "Neural", score: neuralResult ? Math.min(100, neuralResult.internalScore * 1.1) : 0, color: "#ec4899", desc: neuralResult ? "True GPT-2 perplexity" : "Run analysis to see" },
+    { label: "Neural", score: neuralResult ? Math.min(100, neuralResult.internalScore * 1.1) : 0, color: "#ec4899", desc: neuralResult ? "LLM token predictability" : "Run analysis to see" },
   ];
   const N = dims.length;
   const CX = 120, CY = 120, R = 88;
@@ -8180,8 +8180,8 @@ If they disagree (one > 50, one < 30), look for the reason: paraphrased AI? ESL?
     // Strip any accidental markdown fences
     const cleaned = rawText.replace(/```json|```/gi, "").trim();
     parsed = JSON.parse(cleaned);
-    // Attach fallback metadata: surfaced in UI if a fallback model was used.
-    // True perplexity service (HF Spaces) always returns used_fallback: false.
+    // Attach fallback metadata: different Groq models produce different
+    // scores even at temperature=0 -- the primary source of cross-run variance.
     parsed._usedFallbackModel = data.used_fallback ?? false;
     parsed._modelUsed = data.model_used ?? "gpt2+gpt2-medium (binoculars)";
   } catch (err) {
@@ -8217,8 +8217,8 @@ If they disagree (one > 50, one < 30), look for the reason: paraphrased AI? ESL?
       verdictPhrase: "Neural engine unavailable — displaying Engine A rule-based analysis",
       signals: [
         {
-          name: "Neural Perplexity (unavailable)",
-          value: "Perplexity service (HF Spaces) unreachable. The results below are Engine A (Perplexity & Stylometry) rule-based analysis reused here. Sentence highlights reflect 19-signal Engine A scoring, not true token-level perplexity.",
+          name: "GPT-2 Binoculars (unavailable)",
+          value: "API call failed. The results below are Engine A (Perplexity & Stylometry) rule-based analysis reused here. Sentence highlights reflect 19-signal Engine A scoring, not LLM neural analysis.",
           strength: 0, pointsToAI: false, wellSupported: false,
         },
         ...fallbackResult.signals,
@@ -8243,9 +8243,9 @@ If they disagree (one > 50, one < 30), look for the reason: paraphrased AI? ESL?
   if (usedSlidingWindow) {
     npReliabilityNotes.unshift(`Sliding-window analysis: document analyzed as head (first ${MAX_WORDS}w) + tail (last ${TAIL_WORDS}w) to detect mixed authorship across essay sections.`);
   }
-  // Warn when a fallback model was used (retained for compatibility).
-  // True perplexity service (HF Spaces) is deterministic — used_fallback is always false.
-  // This block is retained for compatibility if the route is ever switched back to an LLM.
+  // Warn when a fallback Groq model was used.
+  // Root cause of cross-run score variance: llama-3.3-70b-versatile vs
+  // llama3-70b-8192 vs mixtral produce different scores even at temp=0.
   if (parsed._usedFallbackModel) {
     npReliabilityNotes.unshift(
       `Fallback model used: ${parsed._modelUsed}. Scores may differ slightly from a primary-model run.`
@@ -8332,29 +8332,19 @@ If they disagree (one > 50, one < 30), look for the reason: paraphrased AI? ESL?
   // Map per-sentence data — fill missing entries with neutral values
   const sentenceResults: SentenceResult[] = sentences.map((sent, i) => {
     const ps = parsed.per_sentence?.[i];
-
-    // Support both response formats:
-    //   LLM format (Groq / HF Inference API):  { likelihood: number, signals: string[] }
-    //   True perplexity format (HF Spaces):     { sentence: string, perplexity: number, ai_probability: number }
-    // Use max(score, 10) as final fallback so sentences aren't all filtered out
-    // when overall_score is 0 (INCONCLUSIVE) and per_sentence data is missing/truncated.
+    // Support both LLM format { likelihood, signals[] } and
+    // true perplexity format { ai_probability, perplexity, sentence }
     const rawLikelihood = ps?.likelihood ?? ps?.ai_probability ?? Math.max(score, 10);
     const likelihood = Math.min(95, Math.max(0, Math.round(rawLikelihood)));
-
     const label: "uncertain" | "moderate" | "elevated" =
       // Enhancement #7: standardized thresholds matching Engine A (45/22)
       // Previously NP used 50/25, causing asymmetric sentence highlights between engines.
       likelihood >= 45 ? "elevated" : likelihood >= 22 ? "moderate" : "uncertain";
-
-    // LLM format provides a signals[] array.
-    // True perplexity format (HF Spaces) has no signals array — build a readable
-    // signal string from the raw perplexity data instead.
     const signals: string[] =
       ps?.signals ??
       (ps?.perplexity !== undefined
         ? [`Perplexity: ${ps.perplexity}  ·  AI probability: ${ps.ai_probability}%`]
         : []);
-
     return {
       text: sent,
       likelihood,
@@ -9702,7 +9692,7 @@ function ShareMenu({ perpResult, burstResult, neuralResult, onClose }: {
     return `AI Detection Result: ${tier.label} (${avgAI}% AI score)\n` +
       `Engine 1 – Perplexity & Stylometry: ${pBd.ai}% AI (${perpResult.evidenceStrength})\n` +
       `Engine 2 – Burstiness & Cognitive: ${bBd.ai}% AI (${burstResult.evidenceStrength})\n` +
-      (nBd ? `Engine 3 – Neural Perplexity: ${nBd.ai}% AI (${neuralResult!.evidenceStrength})\n` : "") +
+      (nBd ? `Engine 3 – GPT-2 Binoculars: ${nBd.ai}% AI (${neuralResult!.evidenceStrength})\n` : "") +
       `\nGenerated by AI Content Detector`;
   };
 
@@ -11026,12 +11016,14 @@ export default function DetectorPage() {
     }, 400);
 
     // ── HYBRID GATE: Engine C strategy ───────────────────────────────────────
-    // Engine C runs true token-level perplexity via the Neural Perplexity Service
-    //   deployed on Hugging Face Spaces (runNeuralEngine → /api/neural-analyze).
+    // For CLEAR cases (combined score < 30 or > 70): Engine C runs via Groq
+    //   (runNeuralEngine → /api/neural-analyze) — deep LLM analysis.
     // For AMBIGUOUS cases (30–70): ADDITIONALLY call /api/neural (Gemini free
     //   tier) as a fast second-opinion tiebreaker to resolve borderline texts.
+    // This preserves Groq quota for deep analysis while using Gemini free quota
+    // specifically where it reduces false positives.
     setTimeout(() => {
-      // Engine C always runs via HF Spaces perplexity service for deep analysis
+      // Engine C always runs via Groq for deep analysis
       runNeuralEngine(sanitised, engineAContextRef.current, engineBContextRef.current)
         .then(nResult => {
           setNeuralResult(nResult);
@@ -11083,7 +11075,7 @@ export default function DetectorPage() {
               };
             });
           })
-          .catch(() => {/* Gemini unavailable — fail silently, perplexity service result is sufficient */});
+          .catch(() => {/* Gemini unavailable — fail silently, Groq result is sufficient */});
       }
     }, 450);
   }, [inputText, wc]);
@@ -12213,7 +12205,7 @@ export default function DetectorPage() {
                 originalText={inputText}
               />
               <EngineCard
-                name="Neural Perplexity"
+                name="GPT-2 Binoculars"
                 badge="NP" badgeBg="#7c3aed"
                 icon={<svg className="w-6 h-6 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}><path strokeLinecap="round" strokeLinejoin="round" d="M8.625 12a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 01-2.555-.337A5.972 5.972 0 015.41 20.97a5.969 5.969 0 01-.474-.065 4.48 4.48 0 00.978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25z"/></svg>}
                 result={neuralResult} loading={loadingN}
@@ -12256,7 +12248,7 @@ export default function DetectorPage() {
                   {[
                     { badge: "PS", bg: "#1b3a6b", label: "Perplexity & Stylometry", text: "47 signals across 8 tiers: lexical (vocab density, transitions, bigrams); structural (paragraph openers, conclusion clustering); stylistic (hedging, clause stacking, passive voice); surface (TTR, MTLD, nominalization); semantic (self-similarity, tone flatness, vague citations, discourse schema); enhancement (hapax legomena, Flesch-Kincaid readability fingerprinting, function word profile, Self-BLEU n-gram repetition, semantic density uniformity, capitalization abuse, AI model family fingerprinting, paraphrase attack detection); batch-2 (Zipf's Law deviation, TTR power-law trajectory, KS normality test, anaphora resolution density, argument structure analysis, section-differential scoring, long-document chunk analysis). Human reductions: direct quotes, Filipino/ESL L1-transfer, temporal/spatial grounding. Genre-adaptive weighting. Confidence-based abstention." },
                     { badge: "BC", bg: "#16a34a", label: "Burstiness & Cognitive", text: "8 signals: sentence-length CV (burstiness), short-sentence absence, rhetorical variation, contractions, personal anecdote, numeric specificity. Personal anecdotes and precise numbers reduce AI score (human markers). CV < 0.22 = uniform AI rhythm; CV > 0.42 = natural human variation." },
-                    { badge: "NP", bg: "#7c3aed", label: "Neural Perplexity", text: "LLM-based analysis using Binoculars-style reasoning: token predictability, semantic smoothness, structural uniformity, DetectGPT-style perturbation resistance, bimodal sentence distribution detection (mixed authorship). Calibrated for ESL and Philippine academic context. Runs at temperature=0 for deterministic, reproducible results — the same text always produces the same score. Confidence-based abstention: when all engines return INCONCLUSIVE with high inter-engine disagreement (>40 point spread), no verdict is issued rather than averaging uncertain signals." },
+                    { badge: "NP", bg: "#7c3aed", label: "GPT-2 Binoculars", text: "True token-level perplexity engine using GPT-2 (scorer) and GPT-2-medium (reference) deployed on Hugging Face Spaces. Computes real Binoculars cross-perplexity ratio — mathematically grounded, not LLM estimation. Per-sentence AI probability, bimodal sentence distribution detection (mixed authorship). Calibrated for ESL and Philippine academic context. Deterministic and reproducible — same text always produces same score." },
                   ].map(({ badge, bg, label, text }) => (
                     <div key={badge}>
                       <p className="font-bold text-slate-700 mb-1.5 flex items-center gap-1.5">
