@@ -1,112 +1,110 @@
 import { NextRequest, NextResponse } from "next/server";
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  /api/neural-analyze  — Engine C (Neural Perplexity)
-//  Uses Groq (free tier) to run LLM-based AI detection analysis.
+//  /api/neural-analyze  — Engine C (True Neural Perplexity)
+//  Calls the Neural Perplexity Service deployed on Hugging Face Spaces.
 //
-//  DETERMINISM FIXES (v4.1):
-//    1. temperature: 0     — greedy decoding, same output for same input
-//    2. seed: 42           — Groq honours this for extra reproducibility
-//    3. top_p: 1           — disable nucleus sampling when temp=0
-//    4. model_used         — returned in response so frontend can warn if
-//                            a fallback model was used (different models
-//                            produce different scores even at temp=0)
+//  The service computes REAL token-level perplexity using:
+//    - GPT-2           (scorer model)
+//    - GPT-2-medium    (reference model — for Binoculars cross-perplexity)
 //
-//  Model fallback order (only used on rate-limit, never on bad output):
-//    1. llama-3.3-70b-versatile  (best reasoning, 32K ctx)
-//    2. llama3-70b-8192          (fallback if rate-limited)
-//    3. mixtral-8x7b-32768       (last resort)
+//  This replaces the previous LLM-estimation approach (Groq/HF Inference API)
+//  with mathematically grounded perplexity computation.
 //
-//  ⚠ Score consistency guarantee: only holds when the SAME model is used.
-//     If a fallback model is used, the response includes model_used so the
-//     frontend can surface a "fallback model" warning to the user.
+//  Reference: Hans et al. (2024). Spotting LLMs With Binoculars. ICML 2024.
+//
+//  SETUP:
+//    1. Deploy perplexity-service/ to Hugging Face Spaces (see README.md)
+//    2. Add PERPLEXITY_SERVICE_URL to Vercel environment variables:
+//         PERPLEXITY_SERVICE_URL = https://YOUR-HF-USERNAME-neural-perplexity-service.hf.space
+//    3. Push — Vercel auto-deploys
 // ─────────────────────────────────────────────────────────────────────────────
 
-const GROQ_MODELS = [
-  "llama-3.3-70b-versatile",
-  "llama3-70b-8192",
-  "mixtral-8x7b-32768",
-] as const;
-
-const PRIMARY_MODEL = GROQ_MODELS[0];
-
 export async function POST(req: NextRequest) {
-  const { system, messages, max_tokens } = await req.json();
+  const { messages } = await req.json();
 
-  if (!process.env.GROQ_API_KEY) {
+  if (!process.env.PERPLEXITY_SERVICE_URL) {
     return NextResponse.json(
-      { error: "GROQ_API_KEY is not configured" },
+      { error: "PERPLEXITY_SERVICE_URL is not configured" },
       { status: 500 }
     );
   }
 
-  let lastError = "";
+  // Extract the raw text from the messages array
+  // Engine C passes the text-to-analyze as the user message content
+  const userContent: string = messages?.[0]?.content ?? "";
 
-  for (const model of GROQ_MODELS) {
-    try {
-      const groqRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
-        },
-        body: JSON.stringify({
-          model,
-          max_tokens: max_tokens ?? 4000,
+  // Strip any system prompt wrapper if present — we only want the raw text
+  // The perplexity service does not use a system prompt
+  const textToAnalyze = extractRawText(userContent);
 
-          // ── Determinism settings ──────────────────────────────────────────
-          // temperature: 0  → greedy decoding (argmax), no sampling variance.
-          // Previously 0.1 which introduced token-level stochasticity.
-          temperature: 0,
-
-          // seed: fixed integer → Groq uses this to seed its RNG for any
-          // remaining non-determinism (e.g. internal parallelism rounding).
-          seed: 42,
-
-          // top_p: 1 → no nucleus sampling cutoff when temperature is 0.
-          top_p: 1,
-          // ─────────────────────────────────────────────────────────────────
-
-          messages: [
-            { role: "system", content: system },
-            ...messages,
-          ],
-        }),
-      });
-
-      if (groqRes.status === 429) {
-        // Rate limited on this model — try next
-        lastError = `${model} rate-limited`;
-        continue;
-      }
-
-      if (!groqRes.ok) {
-        const err = await groqRes.text();
-        lastError = `${model}: ${err}`;
-        continue;
-      }
-
-      const data = await groqRes.json();
-      const text = data.choices?.[0]?.message?.content ?? "";
-
-      // Return the model actually used so the frontend can warn if it
-      // differs from the primary model (different models = different scores).
-      const modelUsed = data.model ?? model;
-      const usedFallback = modelUsed !== PRIMARY_MODEL;
-
-      return NextResponse.json({
-        content: [{ type: "text", text }],
-        model_used: modelUsed,
-        used_fallback: usedFallback,
-      });
-    } catch (e: any) {
-      lastError = `${model}: ${e?.message ?? "unknown error"}`;
-      continue;
-    }
+  if (!textToAnalyze || textToAnalyze.length < 50) {
+    return NextResponse.json(
+      { error: "Text too short for perplexity analysis (minimum 50 characters)" },
+      { status: 400 }
+    );
   }
 
-  return NextResponse.json(
-    { error: `All Groq models failed. Last error: ${lastError}` },
-    { status: 503 }
-  );
+  try {
+    const serviceRes = await fetch(
+      `${process.env.PERPLEXITY_SERVICE_URL}/analyze`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: textToAnalyze,
+          max_length: 512,
+          include_sentences: true,
+        }),
+        // Vercel hobby plan: 10s timeout. Pro plan: 60s.
+        // Perplexity on CPU takes ~3-8s for 512 tokens — should be fine.
+        signal: AbortSignal.timeout(55000),
+      }
+    );
+
+    if (!serviceRes.ok) {
+      const err = await serviceRes.text();
+      return NextResponse.json(
+        { error: `Perplexity service error: ${err}` },
+        { status: 503 }
+      );
+    }
+
+    const scores = await serviceRes.json();
+
+    // Serialize scores as JSON string — this is what page.tsx expects from
+    // Engine C: data.content[0].text parsed as JSON
+    const text = JSON.stringify(scores);
+
+    return NextResponse.json({
+      content: [{ type: "text", text }],
+      model_used: "gpt2+gpt2-medium (binoculars)",
+      used_fallback: false,
+    });
+
+  } catch (e: any) {
+    // Timeout or network error
+    return NextResponse.json(
+      { error: `Perplexity service unreachable: ${e?.message ?? "unknown error"}` },
+      { status: 503 }
+    );
+  }
+}
+
+/**
+ * Extract the raw student text from the user message content.
+ * Engine C wraps the text in a prompt — we need just the text portion.
+ * Adjust this function if your system prompt format changes.
+ */
+function extractRawText(content: string): string {
+  // If the content contains a clear delimiter like "TEXT TO ANALYZE:" or
+  // similar, extract just the text portion. Otherwise use the full content.
+  const delimiter = /text to analyze[:\-]\s*/i;
+  const parts = content.split(delimiter);
+  if (parts.length > 1) {
+    return parts[parts.length - 1].trim();
+  }
+
+  // Fallback: return full content (perplexity service handles long inputs)
+  return content.trim();
 }
