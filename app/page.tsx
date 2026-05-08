@@ -1354,7 +1354,7 @@ async function generatePDFReport(
   if (burstResult) drawEngineSection("Burstiness & Cognitive Markers", C.green, "BC", "Sentence length variation (CV), rhetorical devices, short-sentence presence, contraction signals.",  "Sentence Burstiness (CV)",         burstResult);
   if (neuralResult) {
     const violetRGB: RGB = [124, 58, 237];
-    drawEngineSection("GPT-2 Binoculars", violetRGB, "NP", "True token-level perplexity (GPT-2 scorer + GPT-2-medium reference). Binoculars cross-perplexity ratio, per-sentence AI probability, structural uniformity, perturbation resistance, bimodal sentence distribution (mixed authorship), ESL/Philippine calibration.", "Token Predictability + Semantic Smoothness + Perturbation Resistance", neuralResult);
+    drawEngineSection("GPT-2 Binoculars", violetRGB, "GB", "True token-level perplexity (GPT-2 scorer + GPT-2-medium reference). Binoculars cross-perplexity ratio, per-sentence AI probability, structural uniformity, perturbation resistance, bimodal sentence distribution (mixed authorship), ESL/Philippine calibration.", "Token Predictability + Semantic Smoothness + Perturbation Resistance", neuralResult);
   }
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -8648,7 +8648,7 @@ function SignalContributionChart({ perpResult, burstResult, neuralResult }: {
   };
   collect(perpResult, "PS", "#1b3a6b");
   collect(burstResult, "BC", "#16a34a");
-  collect(neuralResult, "NP", "#7c3aed");
+  collect(neuralResult, "GB", "#7c3aed");
 
   // Sort by strength desc, take top signals
   const aiSignals    = allSignals.filter(s => s.pointsToAI).sort((a, b) => b.strength - a.strength);
@@ -10875,7 +10875,7 @@ export default function DetectorPage() {
       finalAvgAI = Math.min(finalAvgAI, 64); // cap below "Likely AI" — it's Mixed, not pure AI
     }
 
-    return { avgAI: finalAvgAI, avgMixed, avgHuman, tier: getTier(finalAvgAI), consensusNote, bimodalNote, bimodalStrength };
+    return { avgAI: finalAvgAI, avgMixed, avgHuman, tier: getTier(finalAvgAI), consensusNote, bimodalNote, bimodalStrength, wPS, wBC, wGB: wNP };
   };
   // OPT P21: Memoize combined/shouldAbstain/banner — only recompute when engine results change
   const combined = useMemo(() => {
@@ -11578,22 +11578,18 @@ export default function DetectorPage() {
                             </span>
                           )}
                         </p>
-                        {/* Ensemble weight badges */}
+                        {/* Ensemble weight badges — driven by actual getCombined() weights */}
                         <div className="flex items-center justify-center gap-1.5 mb-3 flex-wrap">
                           <span className="text-[10px] text-slate-400 mr-0.5">Weights:</span>
                           <span className="px-2 py-0.5 rounded-full bg-violet-50 border border-violet-200 text-[10px] font-semibold text-violet-700">
-                            PS ×{perpResult && burstResult
-                              ? (perpResult.wordCount < 200 ? "0.8" : "1.2")
-                              : "1.2"}
+                            PS ×{combined ? combined.wPS.toFixed(1) : "1.0"}
                           </span>
                           <span className="px-2 py-0.5 rounded-full bg-blue-50 border border-blue-200 text-[10px] font-semibold text-blue-700">
-                            BC ×{perpResult && burstResult
-                              ? (perpResult.wordCount < 200 ? "0.8" : "1.0")
-                              : "1.0"}
+                            BC ×{combined ? combined.wBC.toFixed(1) : "1.0"}
                           </span>
-                          {neuralResult && (
+                          {neuralResult && combined && (
                             <span className="px-2 py-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-[10px] font-semibold text-emerald-700">
-                              NP ×{perpResult && perpResult.wordCount < 200 ? "1.4" : "1.3"}
+                              GB ×{combined.wGB.toFixed(1)}
                             </span>
                           )}
                         </div>
@@ -12206,7 +12202,7 @@ export default function DetectorPage() {
               />
               <EngineCard
                 name="GPT-2 Binoculars"
-                badge="NP" badgeBg="#7c3aed"
+                badge="GB" badgeBg="#7c3aed"
                 icon={<svg className="w-6 h-6 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}><path strokeLinecap="round" strokeLinejoin="round" d="M8.625 12a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 01-2.555-.337A5.972 5.972 0 015.41 20.97a5.969 5.969 0 01-.474-.065 4.48 4.48 0 00.978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25z"/></svg>}
                 result={neuralResult} loading={loadingN}
                 accentColor="#7c3aed"
@@ -12248,7 +12244,7 @@ export default function DetectorPage() {
                   {[
                     { badge: "PS", bg: "#1b3a6b", label: "Perplexity & Stylometry", text: "47 signals across 8 tiers: lexical (vocab density, transitions, bigrams); structural (paragraph openers, conclusion clustering); stylistic (hedging, clause stacking, passive voice); surface (TTR, MTLD, nominalization); semantic (self-similarity, tone flatness, vague citations, discourse schema); enhancement (hapax legomena, Flesch-Kincaid readability fingerprinting, function word profile, Self-BLEU n-gram repetition, semantic density uniformity, capitalization abuse, AI model family fingerprinting, paraphrase attack detection); batch-2 (Zipf's Law deviation, TTR power-law trajectory, KS normality test, anaphora resolution density, argument structure analysis, section-differential scoring, long-document chunk analysis). Human reductions: direct quotes, Filipino/ESL L1-transfer, temporal/spatial grounding. Genre-adaptive weighting. Confidence-based abstention." },
                     { badge: "BC", bg: "#16a34a", label: "Burstiness & Cognitive", text: "8 signals: sentence-length CV (burstiness), short-sentence absence, rhetorical variation, contractions, personal anecdote, numeric specificity. Personal anecdotes and precise numbers reduce AI score (human markers). CV < 0.22 = uniform AI rhythm; CV > 0.42 = natural human variation." },
-                    { badge: "NP", bg: "#7c3aed", label: "GPT-2 Binoculars", text: "True token-level perplexity engine using GPT-2 (scorer) and GPT-2-medium (reference) deployed on Hugging Face Spaces. Computes real Binoculars cross-perplexity ratio — mathematically grounded, not LLM estimation. Per-sentence AI probability, bimodal sentence distribution detection (mixed authorship). Calibrated for ESL and Philippine academic context. Deterministic and reproducible — same text always produces same score." },
+                    { badge: "GB", bg: "#7c3aed", label: "GPT-2 Binoculars", text: "True token-level perplexity engine using GPT-2 (scorer) and GPT-2-medium (reference) deployed on Hugging Face Spaces. Computes real Binoculars cross-perplexity ratio — mathematically grounded, not LLM estimation. Per-sentence AI probability, bimodal sentence distribution detection (mixed authorship). Calibrated for ESL and Philippine academic context. Deterministic and reproducible — same text always produces same score." },
                   ].map(({ badge, bg, label, text }) => (
                     <div key={badge}>
                       <p className="font-bold text-slate-700 mb-1.5 flex items-center gap-1.5">
