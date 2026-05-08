@@ -11160,20 +11160,8 @@ export default function DetectorPage() {
             ))}
           </nav>
 
-          {/* Right side: Auth + Admin */}
-          <div className="flex items-center gap-2 flex-shrink-0">
-
-            {/* Google Sign-In / user badge */}
-            <AuthBar
-              user={user}
-              loading={authLoading}
-              error={authError}
-              onGoogle={signInWithGoogle}
-              onAnon={signInAnon}
-              onSignOut={signOut}
-            />
-
-            {/* Admin link / badge */}
+          {/* Admin link / badge */}
+          <div className="flex items-center flex-shrink-0">
             {isAdmin ? (
               <div className="flex items-center gap-2">
                 <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 text-white text-[11px] font-bold">
