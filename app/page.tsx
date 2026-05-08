@@ -4150,64 +4150,100 @@ function isLikelyESLText(warnings: string[]): boolean {
   return warnings.some(w => w.includes("ESL"));
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  CONFIDENCE INTERVAL CALCULATOR
-//  Takes raw score + signal agreement + warnings → returns [low, high] range.
-//  Per spec: "Defaults to Inconclusive when ambiguity is high"
-// ─────────────────────────────────────────────────────────────────────────────
+// ───────────────────────────────────────────────────────────────────────────────
+//  CONFIDENCE INTERVAL CALCULATOR  (redesigned 2026-05)
+//  Takes raw score + signal agreement + warnings → returns [low, high] + strength.
+//
+//  Three defects in the original caused INCONCLUSIVE to fire far too often:
+//
+//  DEFECT 1 — agreementRatio used wrong denominator
+//    Old: signalsAgreeing / totalSignalCount (e.g. 8/47 = 0.17 → always baseWidth=30)
+//    Fix: normalize against 25% of totalSignalCount as "full agreement" ceiling.
+//         Engine A needs 12/47 active to count as full agreement, not 47/47.
+//         Engine B needs 2/8. This reflects what actually fires on real text.
+//
+//  DEFECT 2 — all warnings widened CI equally (warningPenalty = count * 8)
+//    Warnings for context already acted on in scoring (ESL, genre, domain,
+//    fluency, adversarial) must NOT also expand CI — that double-penalizes.
+//    Only genuine noise warnings (quoted material, very short text) widen CI.
+//
+//  DEFECT 3 — INCONCLUSIVE fired whenever rawScore < 18 AND high >= 20
+//    After Platt scaling, rawScore < 10 is unambiguously leaning human.
+//    A wide CI is a formula artefact, not evidence of genuine ambiguity.
+//    Fix: rawScore < 10 → always LOW. INCONCLUSIVE reserved for score 10–17
+//    with genuine noise signals only.
+// ───────────────────────────────────────────────────────────────────────────────
 
 function computeConfidenceInterval(
   rawScore: number,
-  signalCount: number,
-  signalsAgreeing: number,
+  signalCount: number,      // total possible signals (Engine A: 47, Engine B: 8)
+  signalsAgreeing: number,  // active signals that scored above threshold
   warnings: string[],
   wc: number
 ): { low: number; high: number; strength: EvidenceStrength; phrase: string } {
 
-  // Base uncertainty - wider when fewer signals agree
-  const agreementRatio = signalCount > 0 ? signalsAgreeing / signalCount : 0;
-  const baseWidth = agreementRatio > 0.7 ? 12 : agreementRatio > 0.4 ? 20 : 30;
+  // ── FIX 1: Normalize agreement against 25% of total as "full agreement" ceiling
+  // Asking "of 47 possible signals, how many fired?" gives a structurally near-
+  // zero ratio on every real text. Instead: "did enough signals fire relative to
+  // what is realistically expected?" 25% of totalSignalCount is a practical
+  // ceiling: Engine A at 12+ active = strong agreement; Engine B at 2+ = strong.
+  const expectedActive       = Math.max(signalCount * 0.25, 1);
+  const engineAgreementRatio = Math.min(1, signalsAgreeing / expectedActive);
 
-  // Expand uncertainty for warnings
-  const warningPenalty = warnings.length * 8;
+  const baseWidth = engineAgreementRatio > 0.7  ? 10
+                  : engineAgreementRatio > 0.4  ? 16
+                  : engineAgreementRatio > 0.15 ? 22
+                  : 28;
 
-  // Expand uncertainty for small texts; NARROW it for long ones (enhancement #4)
-  // Long texts (>400w) give statistical signals far more reliability — tighten CI.
+  // ── FIX 2: Only noise-type warnings widen CI ─────────────────────────
+  // Context warnings (ESL, genre, domain, fluency, adversarial, formality)
+  // have already adjusted the score. They must not also expand CI.
+  // Only quoted material and very-short-text warnings are unresolvable noise.
+  const noiseWarnings  = warnings.filter(w =>
+    w.includes("quoted material") || w.includes("too short")
+  ).length;
+  const warningPenalty = noiseWarnings * 6;  // max +12
+
+  // Size penalty/bonus — unchanged
   const sizePenalty = wc < 100 ? 15 : wc < 200 ? 8 : 0;
-  const sizeBonus   = wc > 700 ? 6 : wc > 400 ? 3 : 0; // tighter CI for longer texts
+  const sizeBonus   = wc > 700 ? 6  : wc > 400 ? 3 : 0;
 
-  const totalWidth = Math.min(40, Math.max(4, baseWidth + warningPenalty + sizePenalty - sizeBonus));
-  const low = Math.max(0, Math.round(rawScore - totalWidth / 2));
+  const totalWidth = Math.min(36, Math.max(4, baseWidth + warningPenalty + sizePenalty - sizeBonus));
+  const low  = Math.max(0,   Math.round(rawScore - totalWidth / 2));
   const high = Math.min(100, Math.round(rawScore + totalWidth / 2));
 
-  // Conservative thresholds - per spec "precision over recall"
+  // ── FIX 3: rawScore drives direction; CI width is display only ─────────────
   let strength: EvidenceStrength;
   let phrase: string;
 
-  // Recalibrated thresholds — maxTotal was expanded to 230 with new signals
-  // (structural uniformity, ethics stacking, tricolon density, min floor).
-  // OLD thresholds (45/25) were calibrated for maxTotal=165 and now produce
-  // MEDIUM where HIGH is warranted for clear AI texts.
-  // NEW: HIGH if rawScore>=32 (~74/230 raw); MEDIUM if rawScore>=18 (~41/230 raw)
-  if (rawScore >= 55 && agreementRatio > 0.4) {
+  if (rawScore >= 55 && engineAgreementRatio > 0.4) {
     strength = "HIGH";
     phrase = "Strong AI-associated patterns detected";
-  } else if (rawScore >= 32 && agreementRatio > 0.25) {
+  } else if (rawScore >= 32 && engineAgreementRatio > 0.15) {
     strength = "HIGH";
     phrase = "Significant AI-associated patterns detected";
   } else if (rawScore >= 18) {
     strength = "MEDIUM";
     phrase = "Moderate AI-associated patterns detected";
-  } else if (high < 20) {
+  } else if (rawScore < 10) {
+    // Near-zero score is always LOW regardless of CI width.
+    // Wide CI at low score is a formula artefact, not genuine ambiguity.
     strength = "LOW";
     phrase = "Signals lean human-written";
-  } else {
+  } else if (noiseWarnings > 0) {
+    // Score 10–17 with genuine noise (quoted material / very short text):
+    // direction unclear — the only legitimate INCONCLUSIVE case.
     strength = "INCONCLUSIVE";
     phrase = "Some patterns detected — inconclusive";
+  } else {
+    // Score 10–17, no noise — leaning human but not strongly.
+    strength = "LOW";
+    phrase = "Signals lean human-written";
   }
 
   return { low, high, strength, phrase };
 }
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  DIFFERENTIATED WARNING PENALTIES (Improvement 5)
