@@ -8132,29 +8132,7 @@ Evaluate these dimensions and return a score from 0 (strongly human) to 100 (str
 
 10. perturbation_resistance: Mentally test: if I changed 3 random words to synonyms, would the text degrade? AI text is at a LOCAL MAXIMUM — substitutions make it worse. Human text is NOT at a maximum — substitutions are neutral or improve nothing. A text that reads like "every word is exactly right" scores high here.
 
-11. esl_authenticity: CRITICAL for adversarial ESL mimicry detection. When text exhibits ESL/L1-transfer features (article omissions, preposition confusions, topic-comment constructions, Filipino collocations), evaluate whether those features are AUTHENTIC or INJECTED.
-
-AUTHENTIC ESL markers (score 0–30 = genuine human ESL writer):
-- L1 markers appear INCONSISTENTLY — present in some sentences, absent in others
-- Concentrated in syntactically COMPLEX positions (subordinate clauses, hedging constructions, relative clauses) — not in simple SVO sentences
-- Text contains genuine institutional specificity: named advisor, real course code, actual Philippine university references, specific local context
-- Personal stakes evident: specific anecdotes, concrete stakes, non-generic outcomes
-- L1 errors occur naturally mid-argument where cognitive load is high
-
-INJECTED ESL markers (score 70–100 = AI mimicking ESL):
-- L1 markers appear UNIFORMLY across all sentences regardless of syntactic complexity — AI applies an ESL "rule" globally
-- Article omissions occur in simple SVO sentences where even beginner ESL writers rarely drop articles
-- Academic register is OTHERWISE PERFECT — no other signs of language difficulty
-- Zero institutional specificity — no named advisor, generic university references, placeholder-style location details
-- L1 markers paired with AI-typical token predictability in surrounding text
-
-Score 0 = clearly authentic ESL writer (inconsistent, context-bound errors)
-Score 50 = ambiguous — cannot determine
-Score 100 = clearly injected/artificial ESL (uniform, context-free marker distribution)
-
-IMPORTANT: If esl_authenticity ≥ 65 (likely injected), do NOT apply the standard ESL score reduction. Instead, treat the text as potentially adversarial AI mimicry and maintain your overall_score.
-
-ESL / Non-native English consideration: If writing shows ESL markers AND esl_authenticity < 50 (authentic), REDUCE your overall_score by 10-15 points and note this in reliability_notes. False positives on ESL writers cause severe harm. If esl_authenticity ≥ 65 (injected pattern), skip the reduction.
+ESL / Non-native English consideration: If writing shows ESL markers (shorter average sentences, direct noun-verb-object constructions, limited subordinate clause variety, simpler transition phrases, direct phrasing without elaboration, article omission errors, preposition confusions), REDUCE your overall_score by 10-15 points and note this in reliability_notes. False positives on ESL writers cause severe harm.
 
 CRITICAL EXCEPTION — THESIS CONCLUSION / CHAPTER 5: If the text appears to be a thesis conclusion, summary of findings, or Chapter 5 (look for: numbered findings, "this study successfully", "the results revealed", "recommendations" section, numbered conclusions, baseline model comparison, RMSE/MAE metrics, research objective language), you must NOT apply the ESL reduction even if the author is a Filipino/Philippine student. Here is why: AI-polished thesis conclusions show ZERO ESL transfer features precisely because an LLM wrote or heavily edited them. The absence of L1-interference is itself evidence of AI authorship. Instead, for thesis conclusion text, INCREASE sensitivity to: (1) token predictability — every word feels like the most statistically probable continuation; (2) structural uniformity — each paragraph follows an identical restate→quantify→interpret→generalize schema; (3) nominalization density — abstract nouns ending in -tion, -sion, -ment, -ity dominate; (4) zero hedging failures — no self-corrections, no contradictions, no writer's voice; (5) perfect schema adherence — conclusions that read like an LLM was given "write a conclusion for Finding N" as a prompt.
 
@@ -8183,7 +8161,6 @@ Return exactly this JSON shape:
   "named_entity_grounding": number,
   "bimodal_sentence_distribution": number,
   "perturbation_resistance": number,
-  "esl_authenticity": number,
   "overall_score": number,
   "evidence_strength": "INCONCLUSIVE"|"LOW"|"MEDIUM"|"HIGH",
   "verdict_phrase": string,
@@ -8385,19 +8362,6 @@ If they disagree (one > 50, one < 30), look for the reason: paraphrased AI? ESL?
       strength: Math.min(100, Math.round(parsed.perturbation_resistance ?? 0)),
       pointsToAI: (parsed.perturbation_resistance ?? 0) >= 55,
       wellSupported: (parsed.perturbation_resistance ?? 0) >= 70,
-    },
-    {
-      name: "ESL Authenticity (Adversarial Injection Detector)",
-      value: (() => {
-        const v = parsed.esl_authenticity ?? null;
-        if (v === null) return "ESL authenticity not evaluated (no ESL markers detected).";
-        if (v >= 65) return `Score ${v}/100 — INJECTED ESL pattern detected. L1-transfer markers appear uniformly across sentences regardless of syntactic complexity, paired with otherwise perfect academic register. This pattern is characteristic of AI deliberately mimicking ESL writing to evade detection.`;
-        if (v >= 40) return `Score ${v}/100 — ambiguous ESL pattern. Cannot reliably distinguish authentic ESL from adversarial mimicry. Human review required.`;
-        return `Score ${v}/100 — authentic ESL pattern. L1-transfer markers are inconsistent, context-bound, and concentrated in syntactically complex positions — consistent with a genuine non-native writer. ESL score reduction applied.`;
-      })(),
-      strength: Math.min(100, Math.round(parsed.esl_authenticity ?? 0)),
-      pointsToAI: (parsed.esl_authenticity ?? 0) >= 65,
-      wellSupported: (parsed.esl_authenticity ?? 0) >= 70 || (parsed.esl_authenticity ?? 50) <= 25,
     },
   ];
 
@@ -10894,49 +10858,10 @@ export default function DetectorPage() {
       // Creative: BC (burstiness) is strongest signal for creative text
       wPS = 0.9; wBC = 1.3; wNP = nBd ? 1.0 : 0;
     }
-
-    // ── LAYER 1: ESL-GATED vs UNGATED ENGINE COMBINATION ─────────────────────
-    // Corpus C finding: ESL gate suppresses combined score ~13pts on heavy L1
-    // injection (mean 4.4 markers), pushing 21/30 adversarial texts below threshold.
-    // Engine C (Neural/LLM) already applies its own ESL reasoning internally via
-    // its system prompt ("ESL / Non-native English consideration: REDUCE by 10–15").
-    // Applying the outer gate penalty AGAIN to the combined score double-penalises
-    // ESL texts and is the primary mechanism by which adversarial L1 injection
-    // defeats the system. Fix: compute Engine A+B (gated) and Engine C (ungated)
-    // separately, then combine — Engine C's ungated score provides the adversarial
-    // signal that A+B lose to gate suppression.
-    //
-    // ESL gate active = perpResult has an ESL-related reliability warning.
-    const eslGateActive = perpResult.reliabilityWarnings.some(w =>
-      w.toLowerCase().includes("esl") ||
-      w.toLowerCase().includes("filipino") ||
-      w.toLowerCase().includes("philippine") ||
-      w.toLowerCase().includes("l1-transfer") ||
-      w.toLowerCase().includes("fluency level")
-    );
-
-    let weightedAI: number, weightedMixed: number, weightedHuman: number;
-
-    if (eslGateActive && nBd) {
-      // Separate gated (A+B) from ungated (C) computation.
-      // A+B already have ESL suppression baked into their internalScore.
-      // C's internalScore has its own internal ESL reasoning — do not re-suppress.
-      const wAB = wPS + wBC;
-      const abAI    = Math.round((pBd.ai    * wPS + bBd.ai    * wBC) / wAB);
-      const abMixed = Math.round((pBd.mixed * wPS + bBd.mixed * wBC) / wAB);
-      // Combine gated A+B (65%) with ungated C (35%) when ESL gate is active.
-      // The 65/35 split gives C enough weight to rescue adversarial texts while
-      // keeping A+B dominant enough to protect genuine ESL writers.
-      const wABfinal = 0.65, wNPfinal = 0.35;
-      weightedAI    = Math.round(abAI    * wABfinal + nBd.ai    * wNPfinal);
-      weightedMixed = Math.round(abMixed * wABfinal + nBd.mixed * wNPfinal);
-    } else {
-      // No ESL gate — normal weighted combination
-      const totalW = wPS + wBC + wNP;
-      weightedAI    = Math.round((pBd.ai    * wPS + bBd.ai    * wBC + (nBd?.ai    ?? 0) * wNP) / totalW);
-      weightedMixed = Math.round((pBd.mixed * wPS + bBd.mixed * wBC + (nBd?.mixed  ?? 0) * wNP) / totalW);
-    }
-    weightedHuman = 100 - weightedAI - weightedMixed;
+    const totalW = wPS + wBC + wNP;
+    const weightedAI    = Math.round((pBd.ai    * wPS + bBd.ai    * wBC + (nBd?.ai    ?? 0) * wNP) / totalW);
+    const weightedMixed = Math.round((pBd.mixed * wPS + bBd.mixed * wBC + (nBd?.mixed  ?? 0) * wNP) / totalW);
+    const weightedHuman = 100 - weightedAI - weightedMixed;
 
     // Use weighted values instead of simple averages
     const avgAI    = weightedAI;
@@ -10986,89 +10911,7 @@ export default function DetectorPage() {
       finalAvgAI = Math.min(finalAvgAI, 64); // cap below "Likely AI" — it's Mixed, not pure AI
     }
 
-    // ── LAYER 2: ADVERSARIAL L1 INJECTION DETECTOR ───────────────────────────
-    // Corpus C finding: FNs had mean L1 marker count = 4.4 (heavy injection),
-    // TPs had mean = 2.1 (weak injection). L1 count is already computed in Engine A
-    // (filipinoL1Count). High count + strong Engine C signal + formal genre =
-    // adversarial pattern, not authentic ESL. Reduce gate suppression in this zone.
-    //
-    // Trigger: ESL gate active AND l1Count ≥ 4 AND Engine C internalScore ≥ 55
-    // AND genre is formal (academic_essay / research_abstract / thesis_conclusion).
-    // Effect: partially restore finalAvgAI toward the ungated Engine C signal.
-    // Safe: genuine Filipino ESL writers with high L1 count produce Engine C scores
-    // well below 55 (authentic hedging failures, institutional specificity, real
-    // personal stakes are unmistakable to LLM reasoning).
-    const neuralInternalScore = neuralResult?.internalScore ?? 0;
-    const l1CountFromWarnings = (() => {
-      // Extract l1Count from Engine A reliability warnings (set by filipinoL1TransferScore)
-      const w = perpResult.reliabilityWarnings.find(w => w.includes("L1-transfer pattern"));
-      if (!w) return 0;
-      const m = w.match(/^(\d+)\s+Filipino/);
-      return m ? parseInt(m[1], 10) : 0;
-    })();
-    const formalAdversarialGenre = perpResult.reliabilityWarnings.some(w =>
-      w.includes("research_abstract") || w.includes("lab_report") ||
-      w.includes("academic_essay") || w.includes("thesis_conclusion") ||
-      w.includes("Thesis") || w.includes("Abstract") || w.includes("Research Paper")
-    );
-    let adversarialL1Note: string | null = null;
-    if (
-      eslGateActive &&
-      l1CountFromWarnings >= 4 &&
-      neuralInternalScore >= 55 &&
-      nBd &&
-      formalAdversarialGenre
-    ) {
-      // Corpus C finding: adversarial texts inject 4+ L1 markers uniformly.
-      // Engine C (ungated) sees through this because authentic ESL has inconsistent
-      // L1 marker distribution and concrete institutional specificity.
-      // Restore 40% of the gap between finalAvgAI and Engine C's ungated contribution.
-      const npContribution = nBd.ai; // Engine C's AI% from uiDeriveBreakdown
-      const gap = Math.max(0, npContribution - finalAvgAI);
-      const restoration = Math.round(gap * 0.40);
-      if (restoration > 0) {
-        finalAvgAI = Math.min(100, finalAvgAI + restoration);
-        adversarialL1Note =
-          `Adversarial L1 injection pattern detected: ${l1CountFromWarnings} L1-transfer markers ` +
-          `(≥4 threshold) combined with Engine C score ${neuralInternalScore} (≥55 threshold) ` +
-          `in a formal genre. Corpus C finding: genuine ESL writers average 2.1 L1 markers; ` +
-          `adversarial AI-ESL mimicry averages 4.4 markers applied uniformly. ` +
-          `Gate suppression partially reduced (+${restoration} pts). Human review recommended.`;
-      }
-    }
-
-    // ── LAYER 4: GENRE-ADAPTIVE THRESHOLD LOWERING ───────────────────────────
-    // Corpus C finding: FNs (21/30 missed) had mean combined score 43.3. The lowest
-    // legitimate Corpus A Filipino ESL score was 50, so a threshold of 43 recovers
-    // adversarial texts in the 43–49 range with zero new FP impact on Corpus A.
-    // Only apply when: Engine C score ≥ 50 (prevents gate-suppressed noise from
-    // triggering), AND current finalAvgAI in 43–49 range, AND formal genre active.
-    // Mechanism: lower the effective verdict tier boundary for these texts from 50
-    // to 43 — reclassify 43–49 as "Mixed / Uncertain" instead of "Needs Human Review"
-    // when Engine C independently confirms AI signal.
-    let genreThresholdNote: string | null = null;
-    const inAdversarialZone = finalAvgAI >= 43 && finalAvgAI < 50;
-    if (
-      inAdversarialZone &&
-      neuralInternalScore >= 50 &&
-      formalAdversarialGenre &&
-      eslGateActive
-    ) {
-      // Bump into Mixed/Uncertain territory — still not a hard AI verdict,
-      // but no longer hidden in "Needs Human Review" where it may be dismissed.
-      finalAvgAI = 50;
-      genreThresholdNote =
-        `Genre-adaptive threshold applied: score ${finalAvgAI - 0} (43–49 range) upgraded ` +
-        `to Mixed/Uncertain (50) for formal genre with active ESL gate and Engine C ≥ 50. ` +
-        `Corpus C finding: all legitimate Corpus A ESL texts scored ≥ 50; ` +
-        `threshold 43 is safe with zero false-positive impact. Human review required.`;
-    }
-
-    return {
-      avgAI: finalAvgAI, avgMixed, avgHuman, tier: getTier(finalAvgAI),
-      consensusNote, bimodalNote, bimodalStrength, wPS, wBC, wGB: wNP,
-      adversarialL1Note, genreThresholdNote, eslGateActive,
-    };
+    return { avgAI: finalAvgAI, avgMixed, avgHuman, tier: getTier(finalAvgAI), consensusNote, bimodalNote, bimodalStrength, wPS, wBC, wGB: wNP };
   };
   // OPT P21: Memoize combined/shouldAbstain/banner — only recompute when engine results change
   const combined = useMemo(() => {
@@ -11852,28 +11695,6 @@ export default function DetectorPage() {
                             <div>
                               <p className="text-xs font-bold text-orange-800 mb-0.5">Bimodal Sentence Pattern Detected</p>
                               <p className="text-xs text-orange-700 leading-snug">{combined.bimodalNote}</p>
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Adversarial L1 injection detector — Layer 2 */}
-                        {(combined as any).adversarialL1Note && (
-                          <div className="mt-2 flex items-start gap-2 rounded-xl bg-red-50 border border-red-300 px-3 py-2.5">
-                            <span className="text-red-600 text-sm flex-shrink-0">⚠</span>
-                            <div>
-                              <p className="text-xs font-bold text-red-800 mb-0.5">Adversarial ESL Mimicry Pattern Detected</p>
-                              <p className="text-xs text-red-700 leading-snug">{(combined as any).adversarialL1Note}</p>
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Genre-adaptive threshold — Layer 4 */}
-                        {(combined as any).genreThresholdNote && (
-                          <div className="mt-2 flex items-start gap-2 rounded-xl bg-purple-50 border border-purple-300 px-3 py-2.5">
-                            <span className="text-purple-600 text-sm flex-shrink-0">▲</span>
-                            <div>
-                              <p className="text-xs font-bold text-purple-800 mb-0.5">Genre-Adaptive Threshold Applied</p>
-                              <p className="text-xs text-purple-700 leading-snug">{(combined as any).genreThresholdNote}</p>
                             </div>
                           </div>
                         )}
