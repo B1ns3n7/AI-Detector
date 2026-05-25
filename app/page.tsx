@@ -10,7 +10,7 @@ import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 //  4. Experiment Tracking Panel (history of batch evaluations)
 //  5. SHAP-like Signal Contribution Viewer (feature attribution deltas)
 //  6. Real-time Monitoring Dashboard (in-session volume tracking + drift)
-// ═══════════════════════════════════════════════════════════════════════════════
+//═══════════════════════════════════════════════════════════════════════════════
 
 // ── Dataset & Evaluation Types ───────────────────────────────────────────────
 
