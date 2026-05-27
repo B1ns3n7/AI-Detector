@@ -99,6 +99,56 @@ interface ExperimentRun {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+//  LIVE CONFIG — dataset-driven tunable parameters
+// ═══════════════════════════════════════════════════════════════════════════════
+
+interface LiveConfig {
+  rocThreshold: number;
+  formalityCalibrationPenalty: number;
+  genreEslPenaltyAbstract: number;
+  genreEslPenaltyLab: number;
+  genreEslPenaltyEssay: number;
+  eslBlendBase: number;
+  eslBlendTight: number;
+  burstCVHumanMin: number;
+  updatedAt: number;
+  updatedBy: string;
+  sourceRunId?: string;
+  sourceF1?: number;
+}
+
+const DEFAULT_LIVE_CONFIG: LiveConfig = {
+  rocThreshold: 40,
+  formalityCalibrationPenalty: 12,
+  genreEslPenaltyAbstract: 6,
+  genreEslPenaltyLab: 5,
+  genreEslPenaltyEssay: 4,
+  eslBlendBase: 0.70,
+  eslBlendTight: 0.80,
+  burstCVHumanMin: 0.32,
+  updatedAt: 0,
+  updatedBy: "default",
+};
+
+let _liveConfig: LiveConfig = { ...DEFAULT_LIVE_CONFIG };
+
+function getLiveConfig(): LiveConfig { return _liveConfig; }
+
+async function loadLiveConfigAsync(): Promise<LiveConfig> {
+  try {
+    const stored = await fsGet<LiveConfig>("shared/liveConfig");
+    if (stored) _liveConfig = { ...DEFAULT_LIVE_CONFIG, ...stored };
+  } catch {}
+  return _liveConfig;
+}
+
+async function saveLiveConfigAsync(cfg: LiveConfig): Promise<void> {
+  _liveConfig = cfg;
+  await fsSet("shared/liveConfig", cfg as object);
+  try { localStorage.setItem("aidetect_liveConfig", JSON.stringify(cfg)); } catch {}
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 //  FIREBASE MULTI-USER BACKEND
 //  Drop-in replacement for all localStorage calls.
 //  Setup: add your Firebase config to FIREBASE_CONFIG below, then enable
@@ -5895,9 +5945,10 @@ function runPerplexityEngine(text: string): EngineResult {
       const thesisEslBypass = genreProfile.genre === "thesis_conclusion" &&
         detectThesisGenre(text, sentences).detectedMarkers.includes("zero-L1-transfer");
       if (!thesisEslBypass) {
-      const genreEslPenalty = genreProfile.genre === "research_abstract" ? 6
-        : genreProfile.genre === "lab_report" ? 5
-        : 4;
+      const _cfg = getLiveConfig();
+      const genreEslPenalty = genreProfile.genre === "research_abstract" ? _cfg.genreEslPenaltyAbstract
+        : genreProfile.genre === "lab_report" ? _cfg.genreEslPenaltyLab
+        : _cfg.genreEslPenaltyEssay;
       norm = Math.max(0, norm - genreEslPenalty);
       reliabilityWarnings.push(
         `Genre-adaptive ESL suppression applied (−${genreEslPenalty} pts): ESL gate active + ${genreProfile.description}. ` +
@@ -5911,10 +5962,11 @@ function runPerplexityEngine(text: string): EngineResult {
     // gate is active. The 30% full-signal weight is the proximate cause. In this
     // specific boundary zone, shift blend to 80/20 to suppress residual leakage
     // without affecting high-confidence AI detections (≥ 65).
-    const blendedCandidate = eslSafeNorm * 0.70 + norm * 0.30; // already applied above
+    const _cfgB = getLiveConfig();
+    const blendedCandidate = eslSafeNorm * _cfgB.eslBlendBase + norm * (1 - _cfgB.eslBlendBase); // already applied above
     if (norm >= 35 && norm <= 54) {
-      // Recompute with tighter 80/20 blend for this zone only
-      const tighterBlend = eslSafeNorm * 0.80 + norm * 0.20;
+      // Recompute with tighter blend for this zone only
+      const tighterBlend = eslSafeNorm * _cfgB.eslBlendTight + norm * (1 - _cfgB.eslBlendTight);
       norm = tighterBlend;
       reliabilityWarnings.push(
         `Near-threshold ESL blend tightened to 80/20 (score in 35–54 boundary zone). ` +
@@ -6019,13 +6071,13 @@ function runPerplexityEngine(text: string): EngineResult {
     const sentCV = Math.sqrt(sentVariance) / Math.max(sentAvg, 1);
 
     // Only apply calibration when rhythm is human-typical (cv ≥ 0.32) — not metronomic AI
-    const hasHumanBurstiness = sentCV >= 0.32 && sentences.length >= 8;
+    const hasHumanBurstiness = sentCV >= getLiveConfig().burstCVHumanMin && sentences.length >= 8;
 
     // Score is in the Corpus D cluster (35–62): formal writing accumulates here
     const inFormalCluster = norm >= 35 && norm <= 62;
 
     if (isFormalAcademic && hasHumanBurstiness && inFormalCluster) {
-      const formalityCalibrationPenalty = 12;
+      const formalityCalibrationPenalty = getLiveConfig().formalityCalibrationPenalty;
       norm = Math.max(0, norm - formalityCalibrationPenalty);
       reliabilityWarnings.push(
         `Formality calibration applied (−${formalityCalibrationPenalty} pts): native-English formal academic register detected without ESL markers. ` +
@@ -9866,6 +9918,73 @@ function DatasetEvaluationPanel({
   // The threshold was previously tuned only on Corpus A+B. t=40 is the
   // corpus-weighted optimum across all four corpora simultaneously.
   const [rocThreshold, setRocThreshold] = useState(40);
+  const [learnState, setLearnState] = useState<"idle"|"running"|"done">("idle");
+  const [learnProgress, setLearnProgress] = useState(0);
+  const [optimalConfig, setOptimalConfig] = useState<LiveConfig | null>(null);
+  const [baselineMetrics, setBaselineMetrics] = useState<{f1:number;acc:number;precision:number;recall:number}|null>(null);
+  const [optimalMetrics, setOptimalMetrics] = useState<{f1:number;acc:number;precision:number;recall:number}|null>(null);
+  const [applyStatus, setApplyStatus] = useState<"idle"|"saving"|"saved"|"error">("idle");
+
+  const runLearnFromDataset = async () => {
+    if (!results || !rows.some(r => r.groundTruth)) return;
+    setLearnState("running"); setLearnProgress(0);
+    const baseMetrics = computeClassificationMetrics(results, 40);
+    setBaselineMetrics({ f1: baseMetrics.f1, acc: baseMetrics.accuracy, precision: baseMetrics.precision, recall: baseMetrics.recall });
+    const thresholds = [30,35,40,45,50,55];
+    const formalPens = [8,10,12,14,16];
+    const eslScales  = [0.6,0.8,1.0,1.2,1.4];
+    const blendBases = [0.65,0.70,0.75,0.80];
+    const cvMins     = [0.28,0.30,0.32,0.34];
+    const total = thresholds.length * formalPens.length * eslScales.length * blendBases.length * cvMins.length;
+    let searched = 0, bestF1 = -1;
+    let bestConfig: LiveConfig = { ...DEFAULT_LIVE_CONFIG };
+    let bestMetrics = { f1: 0, acc: 0, precision: 0, recall: 0 };
+    for (const t of thresholds) {
+      for (const fp of formalPens) {
+        for (const es of eslScales) {
+          for (const bb of blendBases) {
+            for (const cv of cvMins) {
+              const formalDelta = fp - 12;
+              const eslDelta = es - 1.0;
+              const candidateResults = results.map(r => {
+                let adj = r.perpScore;
+                if (r.perpScore >= 35 && r.perpScore <= 62) adj = Math.max(0, adj - formalDelta);
+                if (r.perpScore < 55) adj = Math.max(0, adj - Math.round(eslDelta * 3));
+                return { ...r, combinedAI: Math.min(100, Math.max(0, Math.round((adj + r.burstScore) / 2))) };
+              });
+              const m = computeClassificationMetrics(candidateResults, t);
+              if (m.f1 > bestF1) {
+                bestF1 = m.f1;
+                bestMetrics = { f1: m.f1, acc: m.accuracy, precision: m.precision, recall: m.recall };
+                bestConfig = {
+                  rocThreshold: t, formalityCalibrationPenalty: fp,
+                  genreEslPenaltyAbstract: Math.round(6 * es), genreEslPenaltyLab: Math.round(5 * es),
+                  genreEslPenaltyEssay: Math.round(4 * es), eslBlendBase: bb,
+                  eslBlendTight: Math.min(0.95, bb + 0.10), burstCVHumanMin: cv,
+                  updatedAt: Date.now(), updatedBy: "admin-learn",
+                  sourceRunId: runName || "unknown", sourceF1: m.f1,
+                };
+              }
+              searched++;
+              if (searched % 20 === 0) {
+                setLearnProgress(Math.round((searched / total) * 100));
+                await new Promise(resolve => setTimeout(resolve, 0));
+              }
+            }
+          }
+        }
+      }
+    }
+    setOptimalConfig(bestConfig); setOptimalMetrics(bestMetrics);
+    setLearnProgress(100); setLearnState("done");
+  };
+
+  const applyConfig = async () => {
+    if (!optimalConfig) return;
+    setApplyStatus("saving");
+    try { await saveLiveConfigAsync(optimalConfig); setApplyStatus("saved"); }
+    catch { setApplyStatus("error"); }
+  };
 
   const handleFile = async (file: File) => {
     setError(""); setRows([]); setResults(null);
@@ -10261,6 +10380,103 @@ function DatasetEvaluationPanel({
               </div>
             )}
           </div>
+        </div>
+      )}
+      {results && rows.some(r => r.groundTruth) && (
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+          <div className="flex items-start justify-between mb-3">
+            <div>
+              <p className="text-sm font-bold text-slate-800">Learn from Dataset</p>
+              <p className="text-xs text-slate-500 mt-0.5">Grid-search optimal config using your labeled corpus. Tunes threshold, ESL penalties, formality calibration, and blend ratios across 3,000 combinations.</p>
+            </div>
+            {learnState === "idle" && (
+              <button onClick={runLearnFromDataset}
+                className="flex items-center gap-2 px-4 py-2 bg-violet-600 hover:bg-violet-500 text-white text-xs font-bold rounded-xl transition-colors flex-shrink-0 ml-4">
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15M14.25 3.104c.251.023.501.05.75.082M19.8 15l-1.8 1.8m0 0l-1.8-1.8M18 16.8V21m-9-4.2V21m0-4.2L7.2 15M5 14.5l-1.8 1.8" />
+                </svg>
+                Run Optimizer
+              </button>
+            )}
+          </div>
+
+          {learnState === "running" && (
+            <div className="space-y-2">
+              <div className="flex items-center gap-3 text-xs text-slate-600">
+                <svg className="animate-spin h-4 w-4 text-violet-500" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
+                </svg>
+                Searching config space… {learnProgress}% (3,000 combinations)
+              </div>
+              <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                <div className="h-full bg-violet-500 rounded-full transition-all duration-200" style={{ width: `${learnProgress}%` }} />
+              </div>
+            </div>
+          )}
+
+          {learnState === "done" && optimalConfig && baselineMetrics && optimalMetrics && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="rounded-xl bg-slate-50 border border-slate-200 p-4">
+                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wide mb-2">Current (Defaults)</p>
+                  <div className="space-y-1">
+                    {([["F1 Score", baselineMetrics.f1.toFixed(3)],["Accuracy",`${(baselineMetrics.acc*100).toFixed(1)}%`],["Precision",`${(baselineMetrics.precision*100).toFixed(1)}%`],["Recall",`${(baselineMetrics.recall*100).toFixed(1)}%`],["Threshold","t=40"]] as [string,string][]).map(([label,val])=>(
+                      <div key={label} className="flex justify-between text-xs">
+                        <span className="text-slate-500">{label}</span>
+                        <span className="font-bold text-slate-700">{val}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className={`rounded-xl border p-4 ${optimalMetrics.f1 > baselineMetrics.f1 ? "bg-emerald-50 border-emerald-200" : "bg-amber-50 border-amber-200"}`}>
+                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wide mb-2">Optimized Config</p>
+                  <div className="space-y-1">
+                    {([["F1 Score", optimalMetrics.f1.toFixed(3), optimalMetrics.f1-baselineMetrics.f1],["Accuracy",`${(optimalMetrics.acc*100).toFixed(1)}%`,optimalMetrics.acc-baselineMetrics.acc],["Precision",`${(optimalMetrics.precision*100).toFixed(1)}%`,optimalMetrics.precision-baselineMetrics.precision],["Recall",`${(optimalMetrics.recall*100).toFixed(1)}%`,optimalMetrics.recall-baselineMetrics.recall],["Threshold",`t=${optimalConfig.rocThreshold}`,undefined]] as [string,string,number|undefined][]).map(([label,val,delta])=>(
+                      <div key={label} className="flex justify-between text-xs">
+                        <span className="text-slate-500">{label}</span>
+                        <span className="flex items-center gap-1.5">
+                          <span className="font-bold text-slate-700">{val}</span>
+                          {delta !== undefined && <span className={`text-[9px] font-bold ${delta>0?"text-emerald-600":delta<0?"text-red-500":"text-slate-400"}`}>{delta>0?`+${(delta*100).toFixed(1)}%`:delta<0?`${(delta*100).toFixed(1)}%`:"—"}</span>}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-xl bg-violet-50 border border-violet-200 p-4">
+                <p className="text-[10px] font-bold text-violet-700 uppercase tracking-wide mb-2">Optimal Parameters</p>
+                <div className="grid grid-cols-2 gap-x-6 gap-y-1">
+                  {([["Detection Threshold",`${optimalConfig.rocThreshold}%`],["Formality Calibration",`−${optimalConfig.formalityCalibrationPenalty} pts`],["ESL Penalty (Abstract)",`−${optimalConfig.genreEslPenaltyAbstract} pts`],["ESL Penalty (Lab)",`−${optimalConfig.genreEslPenaltyLab} pts`],["ESL Penalty (Essay)",`−${optimalConfig.genreEslPenaltyEssay} pts`],["ESL Blend (Base)",`${(optimalConfig.eslBlendBase*100).toFixed(0)}/${(100-optimalConfig.eslBlendBase*100).toFixed(0)}`],["ESL Blend (Tight)",`${(optimalConfig.eslBlendTight*100).toFixed(0)}/${(100-optimalConfig.eslBlendTight*100).toFixed(0)}`],["Human CV Floor",`≥${optimalConfig.burstCVHumanMin}`]] as [string,string][]).map(([label,val])=>(
+                    <div key={label} className="flex justify-between text-xs py-0.5">
+                      <span className="text-violet-600">{label}</span>
+                      <span className="font-bold text-violet-800">{val}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {optimalMetrics.f1 <= baselineMetrics.f1 && (
+                <div className="rounded-xl bg-amber-50 border border-amber-200 px-4 py-3">
+                  <p className="text-xs text-amber-700 font-semibold">⚠ Optimized F1 is not better than defaults. Dataset may be too small or unbalanced. Apply with caution.</p>
+                </div>
+              )}
+
+              <div className="flex items-center gap-3">
+                <button onClick={applyConfig} disabled={applyStatus==="saving"||applyStatus==="saved"}
+                  className={`flex items-center gap-2 px-5 py-2.5 text-sm font-bold rounded-xl transition-colors ${applyStatus==="saved"?"bg-emerald-100 text-emerald-700 border border-emerald-300":applyStatus==="error"?"bg-red-100 text-red-700 border border-red-300":"bg-violet-600 hover:bg-violet-500 text-white"}`}>
+                  {applyStatus==="saving"&&<svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/></svg>}
+                  {applyStatus==="saved"?"✓ Config Applied":applyStatus==="error"?"✗ Save Failed":applyStatus==="saving"?"Saving…":"Apply to Detector"}
+                </button>
+                <button onClick={()=>{setLearnState("idle");setOptimalConfig(null);setApplyStatus("idle");}}
+                  className="px-4 py-2.5 text-sm text-slate-500 hover:text-slate-700 border border-slate-200 rounded-xl transition-colors">
+                  Discard
+                </button>
+                {applyStatus==="saved"&&<p className="text-xs text-emerald-600 font-semibold">Config live — reload page to apply to new scans.</p>}
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -10715,6 +10931,10 @@ export default function DetectorPage() {
   const [adminLoginLoading, setAdminLoginLoading] = useState(false);
 
   // Check existing session on mount
+  useEffect(() => {
+    loadLiveConfigAsync().catch(console.error);
+  }, []);
+
   useEffect(() => {
     fetch("/api/admin-login")
       .then(r => r.json())

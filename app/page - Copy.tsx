@@ -11314,7 +11314,7 @@ export default function DetectorPage() {
     <main className="min-h-screen" style={{ background: "#f8fafc", fontFamily: "'Inter var', 'Inter', system-ui, sans-serif" }}>
 
       {/* ── Header ────────────────────────────────────────────────────────── */}
-      <style>{`@import url('https://fonts.googleapis.com/css2?family=Inter:wght@600;700&display=swap');`}</style>
+      <style suppressHydrationWarning>{`@import url('https://fonts.googleapis.com/css2?family=Inter:wght@600;700&display=swap');`}</style>
       <header className="sticky top-0 z-30 bg-white border-b border-slate-200 shadow-sm">
         <div className="w-full px-8 sm:px-12 h-20 flex items-center justify-between gap-4">
           {/* Logo */}
